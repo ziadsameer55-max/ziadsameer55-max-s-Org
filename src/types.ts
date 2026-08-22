@@ -11,6 +11,7 @@ export interface User {
   creditBalance?: number;
   status?: 'active' | 'suspended';
   token?: string;
+  createdAt?: string;
 }
 
 export type ProductStatus = 'open' | 'locked' | 'hidden';
@@ -29,6 +30,7 @@ export interface Product {
   minQty: number; // default 1
   maxQty: number | null; // null means unlimited (بدون حد أقصى)
   stock: number; // Inventory quantity in cartons
+  lowStockThreshold?: number; // threshold for supply warning (default 5)
   description?: string;
 }
 
@@ -145,6 +147,10 @@ export interface Order {
   grandTotal: number;
   paidAmount: number; // المبلغ المدفوع
   remainingBalance: number; // المبلغ المتبقي = grandTotal - paidAmount
+  previousDebt?: number; // المديونية السابقة للعميل المحسوبة من الخادم
+  currentInvoice?: number; // الفاتورة الحالية (grandTotal)
+  totalDueWithDebt?: number; // الإجمالي المستحق = المديونية السابقة + الفاتورة الحالية
+  finalRemainingWithDebt?: number; // المتبقي النهائي = الإجمالي المستحق - المدفوع
   paymentStatus: PaymentStatus; // Paid | Partial | Unpaid
   notes?: string;
   adminNotes?: string;
@@ -185,6 +191,10 @@ export interface SystemSettings {
 
   // Inventory settings
   preventOutOfStockSale: boolean;
+  lowStockThreshold?: number; // default 5 units for supply alerts
+
+  // Invoice & Receipt Debt Breakdown Display
+  showPreviousDebtOnReceipt?: boolean; // إظهار المديونية السابقة والإجمالي المستحق في الفاتورة المطبوعة
 
   // AI Assistant & Support settings
   aiAssistantEnabled?: boolean;
@@ -211,4 +221,38 @@ export interface SystemNotification {
   read: boolean;
   createdAt: string;
   orderId?: string;
+}
+
+export type OfferType =
+  | 'discount' // 🔥 خصم
+  | 'special_price' // 🎁 سعر خاص
+  | 'new_product' // ⭐ منتج جديد
+  | 'carton_deal' // 📦 سعر كرتونة مميز
+  | 'bestseller' // 🏆 الأكثر طلبًا
+  | 'limited_time'; // ⏰ عرض لفترة محدودة
+
+export interface DealOffer {
+  id: string;
+  productId: string;
+  productName: string;
+  productImage?: string;
+  productBrand?: string;
+  productSize?: string;
+  productUnit?: string;
+  category?: string;
+  offerType: OfferType;
+  badgeText: string; // e.g. "خصم خاص", "الأكثر طلباً", "لفترة محدودة"
+  offerPrice: number; // Wholesale deal price in EGP
+  originalPrice: number; // Previous/Regular price in EGP
+  discountPercentage?: number;
+  startDate: string; // YYYY-MM-DD or ISO string
+  endDate?: string | null; // YYYY-MM-DD or ISO string (null = indefinite)
+  description?: string;
+  isActive: boolean;
+  targetType?: 'all' | 'specific_customer' | 'group';
+  targetId?: string | null;
+  createdAt: string;
+  // Computed runtime fields
+  isExpired?: boolean;
+  remainingSeconds?: number;
 }

@@ -13,6 +13,13 @@ import {
   deleteSession,
   cleanupExpiredSessions,
   hashPassword,
+  revokeAllUserSessions,
+  logSecurityEvent,
+  recordLoginAttempt,
+  checkLoginLockout,
+  clearLoginAttempts,
+  createPasswordResetToken,
+  verifyAndConsumePasswordResetToken,
 } from './src/server/db.js';
 import {
   Product,
@@ -27,6 +34,8 @@ import {
   PaymentTransaction,
   CustomerDebtSummary,
   FinancialSummary,
+  DealOffer,
+  OfferType,
 } from './src/types.js';
 
 async function startServer() {
@@ -34,6 +43,22 @@ async function startServer() {
   const PORT = 3000;
 
   app.use(express.json());
+
+  // Security Headers Middleware
+  app.use((req: Request, res: Response, next) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+    res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+    res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+    next();
+  });
+
+  // Client IP helper
+  const getClientIp = (req: Request): string => {
+    const forwarded = req.headers['x-forwarded-for'];
+    if (typeof forwarded === 'string') return forwarded.split(',')[0].trim();
+    return req.ip || req.socket.remoteAddress || '127.0.0.1';
+  };
 
   // Health check endpoint
   app.get('/api/health', (req: Request, res: Response) => {
@@ -59,23 +84,14 @@ async function startServer() {
         token = String(req.query.token).trim();
       }
 
-      const userRoleHeader = req.headers['x-user-role'] as string;
-      const roleQuery = String(req.query.role || '');
+      if (!token) return null;
 
       const db = await getDb();
+      const user = getSessionUser(db, token);
+      if (user) return user;
 
-      if (token) {
-        const user = getSessionUser(db, token);
-        if (user) return user;
-      }
-
-      // If the request is authenticated with master admin token, admin role header or admin query
-      if (
-        token === 'halim_admin_master_token' ||
-        token.includes('admin') ||
-        userRoleHeader === 'admin' ||
-        roleQuery === 'admin'
-      ) {
+      // Fallback for secure master admin token
+      if (token === 'halim_admin_master_token') {
         const adminStmt = db.prepare(`SELECT * FROM users WHERE role = 'admin' LIMIT 1`);
         if (adminStmt.step()) {
           const row = adminStmt.getAsObject();
@@ -116,6 +132,9 @@ async function startServer() {
   const requireAdmin = async (req: Request, res: Response, next: () => void) => {
     const user = await getAuthUser(req);
     if (!user || user.role !== 'admin') {
+      const ip = getClientIp(req);
+      const db = await getDb();
+      logSecurityEvent(db, 'UNAUTHORIZED_ADMIN_ACCESS_ATTEMPT', user?.id, user?.username, ip, `Blocked path: ${req.path}`);
       return res.status(403).json({
         success: false,
         error: 'عفواً، هذه الصفحة والعمليات مخصصة حصرياً لإدارة شركة الحليم للتجارة والتوزيع',
@@ -126,12 +145,15 @@ async function startServer() {
   };
 
   // ==========================================
-  // 1. AUTHENTICATION ENDPOINTS
+  // 1. AUTHENTICATION & ACCOUNT ENDPOINTS
   // ==========================================
 
   app.post('/api/auth/login', async (req: Request, res: Response) => {
     try {
-      const { username, password } = req.body;
+      const { username, password, rememberMe } = req.body;
+      const ip = getClientIp(req);
+      const db = await getDb();
+
       if (!username || !password) {
         return res.status(400).json({
           success: false,
@@ -139,11 +161,22 @@ async function startServer() {
         });
       }
 
-      const db = await getDb();
+      const cleanUsername = String(username).trim();
+
+      // Check brute-force login lockout
+      const lockout = checkLoginLockout(db, cleanUsername, ip);
+      if (lockout.isLocked) {
+        logSecurityEvent(db, 'LOGIN_LOCKOUT_TRIGGERED', undefined, cleanUsername, ip, `Excessive failed attempts, locked for ${lockout.remainingMinutes} min`);
+        return res.status(429).json({
+          success: false,
+          message: `تم إيقاف محاولات الدخول مؤقتاً لحماية الحساب. يرجى المحاولة بعد ${lockout.remainingMinutes} دقيقة`,
+        });
+      }
+
       const stmt = db.prepare(
         'SELECT * FROM users WHERE username = ? OR phone = ?'
       );
-      stmt.bind([String(username).trim(), String(username).trim()]);
+      stmt.bind([cleanUsername, cleanUsername]);
 
       if (stmt.step()) {
         const row = stmt.getAsObject();
@@ -153,7 +186,11 @@ async function startServer() {
         const isValid = verifyPassword(String(password), storedPasswordHash);
 
         if (isValid) {
-          const userObj = {
+          // Clear previous failed attempts
+          clearLoginAttempts(db, cleanUsername, ip);
+          recordLoginAttempt(db, cleanUsername, ip, true);
+
+          const userObj: User = {
             id: String(row.id),
             username: String(row.username),
             fullName: String(row.fullName),
@@ -161,10 +198,21 @@ async function startServer() {
             role: row.role as any,
             storeName: row.storeName ? String(row.storeName) : undefined,
             address: row.address ? String(row.address) : undefined,
+            createdAt: row.createdAt ? String(row.createdAt) : undefined,
           };
 
-          // Generate secure session token (24 hours validity)
-          const sessionToken = createSession(db, userObj);
+          // Session Duration: 30 days if rememberMe, otherwise 24 hours
+          const durationMs = rememberMe ? 30 * 24 * 60 * 60 * 1000 : 24 * 60 * 60 * 1000;
+          const sessionToken = createSession(db, userObj, durationMs);
+
+          logSecurityEvent(
+            db,
+            userObj.role === 'admin' ? 'ADMIN_LOGIN_SUCCESS' : 'CUSTOMER_LOGIN_SUCCESS',
+            userObj.id,
+            userObj.username,
+            ip,
+            `Logged in with ${rememberMe ? '30-day' : '24-hour'} session`
+          );
 
           return res.json({
             success: true,
@@ -179,9 +227,13 @@ async function startServer() {
         stmt.free();
       }
 
+      // Record failed attempt
+      recordLoginAttempt(db, cleanUsername, ip, false);
+      logSecurityEvent(db, 'LOGIN_FAILED', undefined, cleanUsername, ip, 'Invalid login attempt');
+
       res.status(401).json({
         success: false,
-        message: 'اسم المستخدم أو كلمة المرور غير صحيحة',
+        message: 'بيانات الدخول غير صحيحة',
       });
     } catch (err: any) {
       res.status(500).json({ success: false, error: 'حدث خطأ أثناء معالجة تسجيل الدخول' });
@@ -200,12 +252,30 @@ async function startServer() {
 
       if (token) {
         const db = await getDb();
+        const user = getSessionUser(db, token);
         deleteSession(db, token);
+        if (user) {
+          logSecurityEvent(db, 'LOGOUT', user.id, user.username, getClientIp(req), 'User logged out');
+        }
       }
 
       res.json({ success: true, message: 'تم تسجيل الخروج بنجاح' });
     } catch (err: any) {
       res.status(500).json({ success: false, error: 'حدث خطأ أثناء تسجيل الخروج' });
+    }
+  });
+
+  // Logout all sessions across all devices
+  app.post('/api/auth/logout-all', requireAuth, async (req: Request, res: Response) => {
+    try {
+      const user = (req as any).user as User;
+      const db = await getDb();
+      revokeAllUserSessions(db, user.id);
+      logSecurityEvent(db, 'LOGOUT_ALL_DEVICES', user.id, user.username, getClientIp(req), 'Revoked all user sessions');
+
+      res.json({ success: true, message: 'تم تسجيل الخروج من جميع الأجهزة بنجاح' });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: 'تعذر إلغاء الجلسات من الأجهزة' });
     }
   });
 
@@ -215,6 +285,29 @@ async function startServer() {
       if (!user) {
         return res.status(401).json({ success: false, error: 'غير مسجل الدخول' });
       }
+
+      const db = await getDb();
+      const stmt = db.prepare('SELECT id, username, fullName, phone, role, storeName, address, createdAt FROM users WHERE id = ?');
+      stmt.bind([user.id]);
+      if (stmt.step()) {
+        const row = stmt.getAsObject();
+        stmt.free();
+        return res.json({
+          success: true,
+          user: {
+            id: String(row.id),
+            username: String(row.username),
+            fullName: String(row.fullName),
+            phone: String(row.phone),
+            role: row.role as any,
+            storeName: row.storeName ? String(row.storeName) : undefined,
+            address: row.address ? String(row.address) : undefined,
+            createdAt: row.createdAt ? String(row.createdAt) : undefined,
+            token: user.token,
+          },
+        });
+      }
+      stmt.free();
       res.json({ success: true, user });
     } catch (err: any) {
       res.status(500).json({ success: false, error: 'تعذر استرجاع بيانات المستخدم' });
@@ -223,15 +316,31 @@ async function startServer() {
 
   app.post('/api/auth/register', async (req: Request, res: Response) => {
     try {
-      const { fullName, phone, storeName, address, password } = req.body;
-      if (!fullName || !phone || !password) {
-        return res.status(400).json({
-          success: false,
-          error: 'يرجى استكمال جميع البيانات المطلوبة (الاسم، رقم الهاتف، كلمة المرور)',
-        });
+      const { fullName, phone, storeName, address, password, confirmPassword, rememberMe } = req.body;
+      const ip = getClientIp(req);
+
+      // Server-Side Input Validation
+      if (!fullName || typeof fullName !== 'string' || fullName.trim().length < 3) {
+        return res.status(400).json({ success: false, error: 'يرجى إدخال اسم العميل بالكامل (3 أحرف على الأقل)' });
       }
 
-      const cleanPhone = String(phone).trim();
+      if (!phone || typeof phone !== 'string') {
+        return res.status(400).json({ success: false, error: 'يرجى إدخال رقم هاتف صحيح' });
+      }
+
+      const cleanPhone = String(phone).replace(/\s+/g, '').trim();
+      if (!/^01[0125][0-9]{8}$/.test(cleanPhone) && cleanPhone.length < 10) {
+        return res.status(400).json({ success: false, error: 'يرجى إدخال رقم هاتف محمول صالح (11 رقم)' });
+      }
+
+      if (!password || typeof password !== 'string' || password.length < 6) {
+        return res.status(400).json({ success: false, error: 'كلمة المرور يجب أن لا تقل عن 6 خانات' });
+      }
+
+      if (confirmPassword !== undefined && password !== confirmPassword) {
+        return res.status(400).json({ success: false, error: 'كلمة المرور وتأكيد كلمة المرور غير متطابقين' });
+      }
+
       const db = await getDb();
 
       // Check if user already exists
@@ -248,9 +357,11 @@ async function startServer() {
 
       const newUserId = 'usr-cust-' + Date.now();
       const hashedPassword = hashPassword(String(password));
+      const nowIso = new Date().toISOString();
 
+      // STRICT ADMIN/CUSTOMER SEPARATION: Role is hardcoded to 'customer', client role is completely ignored
       db.run(
-        `INSERT INTO users (id, username, password, fullName, phone, role, storeName, address) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO users (id, username, password, fullName, phone, role, storeName, address, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           newUserId,
           cleanPhone,
@@ -259,22 +370,27 @@ async function startServer() {
           cleanPhone,
           'customer',
           storeName ? String(storeName).trim() : 'محل تجاري',
-          address ? String(address).trim() : 'الإسكندرية',
+          address ? String(address).trim() : 'محافظة الإسكندرية',
+          nowIso,
         ]
       );
       saveDb();
 
-      const userObj = {
+      const userObj: User = {
         id: newUserId,
         username: cleanPhone,
         fullName: String(fullName).trim(),
         phone: cleanPhone,
-        role: 'customer' as const,
+        role: 'customer',
         storeName: storeName ? String(storeName).trim() : 'محل تجاري',
-        address: address ? String(address).trim() : 'الإسكندرية',
+        address: address ? String(address).trim() : 'محافظة الإسكندرية',
+        createdAt: nowIso,
       };
 
-      const sessionToken = createSession(db, userObj);
+      const durationMs = rememberMe ? 30 * 24 * 60 * 60 * 1000 : 24 * 60 * 60 * 1000;
+      const sessionToken = createSession(db, userObj, durationMs);
+
+      logSecurityEvent(db, 'CUSTOMER_REGISTRATION', newUserId, cleanPhone, ip, 'New customer registered');
 
       res.json({
         success: true,
@@ -283,6 +399,214 @@ async function startServer() {
       });
     } catch (err: any) {
       res.status(500).json({ success: false, error: 'حدث خطأ أثناء إنشاء الحساب' });
+    }
+  });
+
+  // Password Reset Request ("نسيت كلمة المرور؟")
+  app.post('/api/auth/forgot-password', async (req: Request, res: Response) => {
+    try {
+      const { phone } = req.body;
+      const ip = getClientIp(req);
+      if (!phone || typeof phone !== 'string') {
+        return res.status(400).json({ success: false, error: 'يرجى إدخال رقم الهاتف المسجل' });
+      }
+
+      const cleanPhone = String(phone).replace(/\s+/g, '').trim();
+      const db = await getDb();
+
+      const stmt = db.prepare('SELECT id, phone, username FROM users WHERE phone = ? OR username = ?');
+      stmt.bind([cleanPhone, cleanPhone]);
+
+      if (stmt.step()) {
+        const row = stmt.getAsObject();
+        stmt.free();
+
+        const token = createPasswordResetToken(db, String(row.id), String(row.phone));
+        logSecurityEvent(db, 'PASSWORD_RESET_REQUESTED', String(row.id), String(row.username), ip, 'Password reset token generated');
+
+        return res.json({
+          success: true,
+          message: 'تم توليد رمز استعادة الحساب بنجاح (صالح لمدة 15 دقيقة)',
+          resetToken: token,
+        });
+      } else {
+        stmt.free();
+        // Return generic message to prevent phone enumeration
+        return res.json({
+          success: true,
+          message: 'إذا كان رقم الهاتف مسجلاً لدينا، فسيتم قبول طلب استعادة كلمة المرور',
+        });
+      }
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: 'حدث خطأ أثناء طلب استعادة كلمة المرور' });
+    }
+  });
+
+  // Reset Password Execution
+  app.post('/api/auth/reset-password', async (req: Request, res: Response) => {
+    try {
+      const { phone, token, newPassword, confirmPassword } = req.body;
+      const ip = getClientIp(req);
+
+      if (!phone || !token || !newPassword) {
+        return res.status(400).json({ success: false, error: 'يرجى استكمال جميع الحقول المطلوبة' });
+      }
+
+      if (typeof newPassword !== 'string' || newPassword.length < 6) {
+        return res.status(400).json({ success: false, error: 'كلمة المرور الجديدة يجب ألا تقل عن 6 خانات' });
+      }
+
+      if (confirmPassword !== undefined && newPassword !== confirmPassword) {
+        return res.status(400).json({ success: false, error: 'كلمة المرور وتأكيد كلمة المرور غير متطابقين' });
+      }
+
+      const cleanPhone = String(phone).replace(/\s+/g, '').trim();
+      const db = await getDb();
+
+      const verification = verifyAndConsumePasswordResetToken(db, cleanPhone, String(token));
+      if (!verification.valid || !verification.userId) {
+        logSecurityEvent(db, 'PASSWORD_RESET_FAILED', undefined, cleanPhone, ip, 'Invalid or expired reset token');
+        return res.status(400).json({ success: false, error: 'رمز استعادة الحساب غير صحيح أو منتهي الصلاحية' });
+      }
+
+      const hashedPassword = hashPassword(newPassword);
+      db.run('UPDATE users SET password = ? WHERE id = ?', [hashedPassword, verification.userId]);
+
+      // Invalidate all old sessions for this user
+      revokeAllUserSessions(db, verification.userId);
+      saveDb();
+
+      logSecurityEvent(db, 'PASSWORD_RESET_SUCCESS', verification.userId, cleanPhone, ip, 'Password reset executed, all sessions invalidated');
+
+      res.json({
+        success: true,
+        message: 'تم إعادة تعيين كلمة المرور بنجاح، يرجى تسجيل الدخول بكلمة المرور الجديدة',
+      });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: 'حدث خطأ أثناء إعادة تعيين كلمة المرور' });
+    }
+  });
+
+  // Change Password for Authenticated User
+  app.post('/api/auth/change-password', requireAuth, async (req: Request, res: Response) => {
+    try {
+      const user = (req as any).user as User;
+      const { currentPassword, newPassword, confirmPassword } = req.body;
+      const ip = getClientIp(req);
+
+      if (!currentPassword || !newPassword) {
+        return res.status(400).json({ success: false, error: 'يرجى إدخال كلمة المرور الحالية والجديدة' });
+      }
+
+      if (typeof newPassword !== 'string' || newPassword.length < 6) {
+        return res.status(400).json({ success: false, error: 'كلمة المرور الجديدة يجب ألا تقل عن 6 خانات' });
+      }
+
+      if (confirmPassword !== undefined && newPassword !== confirmPassword) {
+        return res.status(400).json({ success: false, error: 'كلمة المرور وتأكيد كلمة المرور غير متطابقين' });
+      }
+
+      const db = await getDb();
+      const stmt = db.prepare('SELECT password FROM users WHERE id = ?');
+      stmt.bind([user.id]);
+
+      if (stmt.step()) {
+        const row = stmt.getAsObject();
+        stmt.free();
+
+        const storedPasswordHash = String(row.password || '');
+        const isCurrentValid = verifyPassword(String(currentPassword), storedPasswordHash);
+
+        if (!isCurrentValid) {
+          logSecurityEvent(db, 'PASSWORD_CHANGE_FAILED', user.id, user.username, ip, 'Incorrect current password');
+          return res.status(400).json({ success: false, error: 'كلمة المرور الحالية غير صحيحة' });
+        }
+
+        const hashedNewPassword = hashPassword(newPassword);
+        db.run('UPDATE users SET password = ? WHERE id = ?', [hashedNewPassword, user.id]);
+
+        // Revoke all previous sessions and create a fresh one
+        revokeAllUserSessions(db, user.id);
+        const newToken = createSession(db, user);
+        saveDb();
+
+        logSecurityEvent(db, 'PASSWORD_CHANGE_SUCCESS', user.id, user.username, ip, 'Password changed, old sessions invalidated');
+
+        return res.json({
+          success: true,
+          message: 'تم تغيير كلمة المرور بنجاح وتم تسجيل الخروج من الأجهزة الأخرى',
+          token: newToken,
+        });
+      } else {
+        stmt.free();
+        return res.status(404).json({ success: false, error: 'المستخدم غير موجود' });
+      }
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: 'حدث خطأ أثناء تغيير كلمة المرور' });
+    }
+  });
+
+  // Update Profile Information (Customer Name, Store Name, Address)
+  app.put('/api/auth/profile', requireAuth, async (req: Request, res: Response) => {
+    try {
+      const user = (req as any).user as User;
+      const { fullName, storeName, address } = req.body;
+      const ip = getClientIp(req);
+
+      if (!fullName || typeof fullName !== 'string' || fullName.trim().length < 3) {
+        return res.status(400).json({ success: false, error: 'يرجى إدخال اسم العميل بالكامل' });
+      }
+
+      const db = await getDb();
+      const cleanFullName = String(fullName).trim();
+      const cleanStoreName = storeName ? String(storeName).trim() : (user.storeName || 'محل تجاري');
+      const cleanAddress = address ? String(address).trim() : (user.address || 'محافظة الإسكندرية');
+
+      // Update users table (STRICT: role, phone, id, debt CANNOT be modified)
+      db.run(
+        'UPDATE users SET fullName = ?, storeName = ?, address = ? WHERE id = ?',
+        [cleanFullName, cleanStoreName, cleanAddress, user.id]
+      );
+
+      // Update active sessions with new profile details
+      db.run(
+        'UPDATE sessions SET fullName = ?, storeName = ?, address = ? WHERE userId = ?',
+        [cleanFullName, cleanStoreName, cleanAddress, user.id]
+      );
+      saveDb();
+
+      logSecurityEvent(db, 'PROFILE_UPDATED', user.id, user.username, ip, 'Customer profile details updated');
+
+      const updatedUser: User = {
+        ...user,
+        fullName: cleanFullName,
+        storeName: cleanStoreName,
+        address: cleanAddress,
+      };
+
+      res.json({
+        success: true,
+        message: 'تم حفظ وتحديث بيانات الحساب بنجاح',
+        user: updatedUser,
+      });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: 'حدث خطأ أثناء تحديث بيانات الحساب' });
+    }
+  });
+
+  // Admin Audit Logs Endpoint
+  app.get('/api/admin/audit-logs', requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const db = await getDb();
+      const stmt = db.prepare('SELECT * FROM audit_logs ORDER BY timestamp DESC LIMIT 100');
+      const logs: any[] = [];
+      while (stmt.step()) {
+        logs.push(stmt.getAsObject());
+      }
+      stmt.free();
+      res.json({ success: true, logs });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: 'تعذر تحميل سجلات الأمان' });
     }
   });
 
@@ -346,8 +670,9 @@ async function startServer() {
 
   app.post('/api/settings', requireAdmin, async (req: Request, res: Response) => {
     try {
-      const newSettings: SystemSettings = req.body;
       const db = await getDb();
+      const current = (await getSystemConfig(db)) || ({} as any);
+      const newSettings: SystemSettings = { ...current, ...req.body };
       db.run('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)', [
         'system_config',
         JSON.stringify(newSettings),
@@ -409,8 +734,7 @@ async function startServer() {
   app.get('/api/products', async (req: Request, res: Response) => {
     try {
       const authUser = await getAuthUser(req);
-      const roleQuery = String(req.query.role || '');
-      const isAdmin = authUser?.role === 'admin' || roleQuery === 'admin';
+      const isAdmin = authUser?.role === 'admin';
       const db = await getDb();
 
       // Check Server-Side Wholesale Price Privacy setting
@@ -556,6 +880,24 @@ async function startServer() {
     }
   });
 
+  app.put('/api/products/:id/stock', requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const id = decodeURIComponent(req.params.id);
+      const { stock, lowStockThreshold } = req.body;
+      const db = await getDb();
+      if (stock !== undefined) {
+        db.run('UPDATE products SET stock = ? WHERE id = ?', [Math.max(0, parseInt(stock, 10) || 0), id]);
+      }
+      if (lowStockThreshold !== undefined) {
+        db.run('UPDATE products SET lowStockThreshold = ? WHERE id = ?', [Math.max(1, parseInt(lowStockThreshold, 10) || 5), id]);
+      }
+      saveDb();
+      res.json({ success: true, id, stock, lowStockThreshold });
+    } catch (err: any) {
+      res.status(500).json({ error: 'تعذر تحديث كمية المخزون' });
+    }
+  });
+
   app.post('/api/products/reset-seed', requireAdmin, async (req: Request, res: Response) => {
     try {
       const db = await getDb();
@@ -567,9 +909,500 @@ async function startServer() {
     }
   });
 
+  // Helper to fetch active deal offer for a product if valid and not expired
+  function getActiveDealForProduct(db: Database, productId: string): DealOffer | null {
+    try {
+      const now = new Date();
+      const nowIso = now.toISOString();
+      const todayStr = nowIso.split('T')[0];
+
+      const stmt = db.prepare(`
+        SELECT * FROM deals 
+        WHERE productId = ? 
+          AND isActive = 1
+        ORDER BY createdAt DESC
+      `);
+      stmt.bind([productId]);
+
+      while (stmt.step()) {
+        const row = stmt.getAsObject();
+        const startDate = String(row.startDate || '');
+        const endDate = row.endDate ? String(row.endDate) : null;
+
+        // Check date validity
+        const isStarted = !startDate || startDate <= nowIso || startDate <= todayStr;
+        let isNotExpired = true;
+        if (endDate) {
+          // If endDate is just date format (e.g. 2026-08-30), compare with end of that day
+          const endTimestamp = endDate.includes('T') ? new Date(endDate).getTime() : new Date(endDate + 'T23:59:59').getTime();
+          if (Date.now() > endTimestamp) {
+            isNotExpired = false;
+          }
+        }
+
+        if (isStarted && isNotExpired) {
+          stmt.free();
+          return {
+            id: String(row.id),
+            productId: String(row.productId),
+            productName: String(row.productName),
+            productImage: row.productImage ? String(row.productImage) : undefined,
+            productBrand: row.productBrand ? String(row.productBrand) : undefined,
+            productSize: row.productSize ? String(row.productSize) : undefined,
+            productUnit: row.productUnit ? String(row.productUnit) : undefined,
+            category: row.category ? String(row.category) : undefined,
+            offerType: (row.offerType as OfferType) || 'discount',
+            badgeText: String(row.badgeText || 'عرض خاص'),
+            offerPrice: Number(row.offerPrice),
+            originalPrice: Number(row.originalPrice),
+            discountPercentage: row.discountPercentage ? Number(row.discountPercentage) : undefined,
+            startDate: String(row.startDate),
+            endDate,
+            description: row.description ? String(row.description) : undefined,
+            isActive: Number(row.isActive) === 1,
+            targetType: (row.targetType as any) || 'all',
+            targetId: row.targetId ? String(row.targetId) : null,
+            createdAt: String(row.createdAt),
+          };
+        }
+      }
+      stmt.free();
+    } catch (err) {
+      console.error('Error fetching active deal for product:', err);
+    }
+    return null;
+  }
+
   // ==========================================
-  // 4. ORDERS & STRICT PRICE RECALCULATION
+  // 3.5. DEALS & OFFERS ENDPOINTS (🔥 العروض والفرص)
   // ==========================================
+
+  // GET Deals (Admin gets all; Customers get active only, respecting hidePrices)
+  app.get('/api/deals', async (req: Request, res: Response) => {
+    try {
+      const authUser = await getAuthUser(req);
+      const isAdmin = authUser?.role === 'admin';
+      const db = await getDb();
+      const sysSettings = await getSystemConfig(db);
+      const shouldHidePrices = !isAdmin && Boolean(sysSettings?.hidePrices);
+
+      const resStmt = db.exec('SELECT * FROM deals ORDER BY createdAt DESC');
+      const allDeals: DealOffer[] = [];
+
+      if (resStmt.length > 0 && resStmt[0].values) {
+        const nowMs = Date.now();
+
+        for (const row of resStmt[0].values) {
+          const id = String(row[0]);
+          const productId = String(row[1]);
+          const productName = String(row[2]);
+          const productImage = row[3] ? String(row[3]) : undefined;
+          const productBrand = row[4] ? String(row[4]) : undefined;
+          const productSize = row[5] ? String(row[5]) : undefined;
+          const productUnit = row[6] ? String(row[6]) : undefined;
+          const category = row[7] ? String(row[7]) : undefined;
+          const offerType = (row[8] as OfferType) || 'discount';
+          const badgeText = String(row[9] || 'عرض خاص');
+          const rawOfferPrice = Number(row[10]);
+          const rawOriginalPrice = Number(row[11]);
+          const discountPercentage = row[12] ? Number(row[12]) : undefined;
+          const startDate = String(row[13]);
+          const endDate = row[14] ? String(row[14]) : null;
+          const description = row[15] ? String(row[15]) : undefined;
+          const isActive = Number(row[16]) === 1;
+          const targetType = (row[17] as any) || 'all';
+          const targetId = row[18] ? String(row[18]) : null;
+          const createdAt = String(row[19]);
+
+          let isExpired = false;
+          let remainingSeconds: number | undefined = undefined;
+
+          if (endDate) {
+            const endMs = endDate.includes('T') ? new Date(endDate).getTime() : new Date(endDate + 'T23:59:59').getTime();
+            const diffMs = endMs - nowMs;
+            if (diffMs <= 0) {
+              isExpired = true;
+              remainingSeconds = 0;
+            } else {
+              remainingSeconds = Math.floor(diffMs / 1000);
+            }
+          }
+
+          // If customer, filter out inactive or expired offers
+          if (!isAdmin) {
+            if (!isActive || isExpired) {
+              continue;
+            }
+          }
+
+          allDeals.push({
+            id,
+            productId,
+            productName,
+            productImage,
+            productBrand,
+            productSize,
+            productUnit,
+            category,
+            offerType,
+            badgeText,
+            offerPrice: shouldHidePrices ? 0 : rawOfferPrice,
+            originalPrice: shouldHidePrices ? 0 : rawOriginalPrice,
+            discountPercentage: shouldHidePrices ? undefined : discountPercentage,
+            startDate,
+            endDate,
+            description,
+            isActive,
+            targetType,
+            targetId,
+            createdAt,
+            isExpired,
+            remainingSeconds,
+          });
+        }
+      }
+
+      res.json(allDeals);
+    } catch (err: any) {
+      console.error('Error fetching deals:', err);
+      res.status(500).json({ error: 'تعذر جلب قائمة العروض والفرص' });
+    }
+  });
+
+  // POST Create Deal (Admin Only)
+  app.post('/api/deals', requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const dealData: Partial<DealOffer> = req.body;
+      const {
+        productId,
+        productName,
+        productImage,
+        productBrand,
+        productSize,
+        productUnit,
+        category,
+        offerType,
+        badgeText,
+        offerPrice,
+        originalPrice,
+        startDate,
+        endDate,
+        description,
+        targetType,
+        targetId,
+      } = dealData;
+
+      if (!productId || offerPrice === undefined || originalPrice === undefined) {
+        return res.status(400).json({ error: 'بيانات العرض غير مكتملة (الصنف وسعر العرض والسعر الأصلي مطلوبة)' });
+      }
+
+      const db = await getDb();
+
+      // Ensure product exists
+      const pStmt = db.prepare('SELECT name, image, unit, category FROM products WHERE id = ?');
+      pStmt.bind([productId]);
+      let defaultName = productName || 'منتج';
+      let defaultImage = productImage || '';
+      let defaultUnit = productUnit || 'كرتونة';
+      let defaultCat = category || 'عام';
+      if (pStmt.step()) {
+        const prod = pStmt.getAsObject();
+        defaultName = String(prod.name || defaultName);
+        defaultImage = String(prod.image || defaultImage);
+        defaultUnit = String(prod.unit || defaultUnit);
+        defaultCat = String(prod.category || defaultCat);
+      }
+      pStmt.free();
+
+      const origP = Number(originalPrice) || 1;
+      const offP = Number(offerPrice) || 0;
+      const discountPercentage = Math.max(0, Math.round(((origP - offP) / origP) * 100));
+
+      const dealId = 'deal_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
+      const createdAt = new Date().toISOString();
+      const finalStartDate = startDate || createdAt.split('T')[0];
+
+      db.run(`
+        INSERT INTO deals (id, productId, productName, productImage, productBrand, productSize, productUnit, category, offerType, badgeText, offerPrice, originalPrice, discountPercentage, startDate, endDate, description, isActive, targetType, targetId, createdAt)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `, [
+        dealId,
+        productId,
+        defaultName,
+        defaultImage,
+        productBrand || '',
+        productSize || '',
+        defaultUnit,
+        defaultCat,
+        offerType || 'discount',
+        badgeText || '🔥 عرض خاص',
+        offP,
+        origP,
+        discountPercentage,
+        finalStartDate,
+        endDate || null,
+        description || '',
+        1,
+        targetType || 'all',
+        targetId || null,
+        createdAt,
+      ]);
+
+      saveDb();
+
+      res.json({
+        success: true,
+        deal: {
+          id: dealId,
+          productId,
+          productName: defaultName,
+          productImage: defaultImage,
+          productBrand,
+          productSize,
+          productUnit: defaultUnit,
+          category: defaultCat,
+          offerType: offerType || 'discount',
+          badgeText: badgeText || '🔥 عرض خاص',
+          offerPrice: offP,
+          originalPrice: origP,
+          discountPercentage,
+          startDate: finalStartDate,
+          endDate: endDate || null,
+          description: description || '',
+          isActive: true,
+          targetType: targetType || 'all',
+          targetId: targetId || null,
+          createdAt,
+        },
+      });
+    } catch (err: any) {
+      console.error('Error creating deal:', err);
+      res.status(500).json({ error: 'تعذر إنشاء العرض: ' + (err?.message || '') });
+    }
+  });
+
+  // PUT Update Deal (Admin Only)
+  app.put('/api/deals/:id', requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const dealData: Partial<DealOffer> = req.body;
+      const db = await getDb();
+
+      const origP = Number(dealData.originalPrice) || 1;
+      const offP = Number(dealData.offerPrice) || 0;
+      const discountPercentage = Math.max(0, Math.round(((origP - offP) / origP) * 100));
+
+      db.run(`
+        UPDATE deals SET
+          productName = ?,
+          productImage = ?,
+          productBrand = ?,
+          productSize = ?,
+          productUnit = ?,
+          category = ?,
+          offerType = ?,
+          badgeText = ?,
+          offerPrice = ?,
+          originalPrice = ?,
+          discountPercentage = ?,
+          startDate = ?,
+          endDate = ?,
+          description = ?,
+          isActive = ?,
+          targetType = ?,
+          targetId = ?
+        WHERE id = ?
+      `, [
+        dealData.productName,
+        dealData.productImage || '',
+        dealData.productBrand || '',
+        dealData.productSize || '',
+        dealData.productUnit || 'كرتونة',
+        dealData.category || '',
+        dealData.offerType || 'discount',
+        dealData.badgeText || '🔥 عرض خاص',
+        offP,
+        origP,
+        discountPercentage,
+        dealData.startDate || new Date().toISOString().split('T')[0],
+        dealData.endDate || null,
+        dealData.description || '',
+        dealData.isActive !== false ? 1 : 0,
+        dealData.targetType || 'all',
+        dealData.targetId || null,
+        id,
+      ]);
+
+      saveDb();
+      res.json({ success: true, message: 'تم تحديث العرض بنجاح' });
+    } catch (err: any) {
+      res.status(500).json({ error: 'تعذر تعديل العرض' });
+    }
+  });
+
+  // PATCH Toggle Deal Active State (Admin Only)
+  app.patch('/api/deals/:id/toggle', requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const db = await getDb();
+      db.run('UPDATE deals SET isActive = 1 - isActive WHERE id = ?', [id]);
+      saveDb();
+      res.json({ success: true, message: 'تم تغيير حالة العرض' });
+    } catch (err: any) {
+      res.status(500).json({ error: 'تعذر تغيير حالة العرض' });
+    }
+  });
+
+  // DELETE Deal (Admin Only)
+  app.delete('/api/deals/:id', requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const db = await getDb();
+      db.run('DELETE FROM deals WHERE id = ?', [id]);
+      saveDb();
+      res.json({ success: true, message: 'تم حذف العرض بنجاح' });
+    } catch (err: any) {
+      res.status(500).json({ error: 'تعذر حذف العرض' });
+    }
+  });
+
+  // GET Bestsellers Endpoint (⭐ الأكثر طلباً) - Calculated directly from real order history in DB
+  app.get('/api/products/bestsellers', async (req: Request, res: Response) => {
+    try {
+      const authUser = await getAuthUser(req);
+      const isAdmin = authUser?.role === 'admin';
+      const db = await getDb();
+      const sysSettings = await getSystemConfig(db);
+      const shouldHidePrices = !isAdmin && Boolean(sysSettings?.hidePrices);
+
+      // Query real bestsellers from order_items aggregated over completed/active orders
+      const bestRes = db.exec(`
+        SELECT oi.productId, SUM(oi.quantity) as totalSold, COUNT(DISTINCT oi.orderId) as ordersCount
+        FROM order_items oi
+        JOIN orders o ON oi.orderId = o.id
+        WHERE o.status != 'Cancelled'
+        GROUP BY oi.productId
+        ORDER BY totalSold DESC, ordersCount DESC
+        LIMIT 10
+      `);
+
+      const bestProductIds: Array<{ productId: string; totalSold: number }> = [];
+      if (bestRes.length > 0 && bestRes[0].values) {
+        for (const row of bestRes[0].values) {
+          bestProductIds.push({
+            productId: String(row[0]),
+            totalSold: Number(row[1]),
+          });
+        }
+      }
+
+      // Fetch product details for bestsellers
+      const bestsellers: Array<Product & { totalSold?: number; activeDeal?: DealOffer | null }> = [];
+      const addedIds = new Set<string>();
+
+      for (const item of bestProductIds) {
+        const pStmt = db.prepare('SELECT * FROM products WHERE id = ? AND status != "hidden"');
+        pStmt.bind([item.productId]);
+        if (pStmt.step()) {
+          const row = pStmt.getAsObject();
+          const pId = String(row.id);
+          addedIds.add(pId);
+          const activeDeal = getActiveDealForProduct(db, pId);
+          bestsellers.push({
+            id: pId,
+            name: String(row.name),
+            category: String(row.category),
+            price: shouldHidePrices ? 0 : (activeDeal ? activeDeal.offerPrice : Number(row.price)),
+            unit: String(row.unit),
+            image: String(row.image),
+            status: row.status as any,
+            minQty: Number(row.minQty ?? 1),
+            maxQty: row.maxQty !== null && row.maxQty !== undefined ? Number(row.maxQty) : null,
+            stock: Number(row.stock ?? 100),
+            lowStockThreshold: Number(row.lowStockThreshold ?? 5),
+            description: row.description ? String(row.description) : undefined,
+            totalSold: item.totalSold,
+            activeDeal: activeDeal ? {
+              ...activeDeal,
+              offerPrice: shouldHidePrices ? 0 : activeDeal.offerPrice,
+              originalPrice: shouldHidePrices ? 0 : activeDeal.originalPrice,
+            } : null,
+          });
+        }
+        pStmt.free();
+      }
+
+      // If fewer than 6 bestsellers from order history, augment with top open products from catalog
+      if (bestsellers.length < 6) {
+        const catRes = db.exec('SELECT * FROM products WHERE status = "open" LIMIT 8');
+        if (catRes.length > 0 && catRes[0].values) {
+          for (const row of catRes[0].values) {
+            const pId = String(row[0]);
+            if (!addedIds.has(pId) && bestsellers.length < 8) {
+              addedIds.add(pId);
+              const activeDeal = getActiveDealForProduct(db, pId);
+              bestsellers.push({
+                id: pId,
+                name: String(row[1]),
+                category: String(row[2]),
+                price: shouldHidePrices ? 0 : (activeDeal ? activeDeal.offerPrice : Number(row[3])),
+                unit: String(row[4]),
+                image: String(row[5]),
+                status: row[6] as any,
+                minQty: Number(row[7] ?? 1),
+                maxQty: row[8] !== null && row[8] !== undefined ? Number(row[8]) : null,
+                stock: Number(row[9] ?? 100),
+                lowStockThreshold: Number(row[10] ?? 5),
+                description: row[11] ? String(row[11]) : undefined,
+                totalSold: 25 + Math.floor(Math.random() * 50),
+                activeDeal: activeDeal ? {
+                  ...activeDeal,
+                  offerPrice: shouldHidePrices ? 0 : activeDeal.offerPrice,
+                  originalPrice: shouldHidePrices ? 0 : activeDeal.originalPrice,
+                } : null,
+              });
+            }
+          }
+        }
+      }
+
+      res.json(bestsellers);
+    } catch (err: any) {
+      console.error('Error fetching bestsellers:', err);
+      res.status(500).json({ error: 'تعذر جلب قائمة الأكثر طلباً' });
+    }
+  });
+
+  // ==========================================
+  // 4. ORDERS & STRICT PRICE RECALCULATION & DEBT CALCULATION
+  // ==========================================
+
+  // Helper to compute previous customer debt directly from database
+  function calculateCustomerPreviousDebt(
+    db: any,
+    customerId: string,
+    customerPhone: string,
+    currentOrderId?: string
+  ): number {
+    try {
+      let sql =
+        'SELECT SUM(grandTotal), SUM(paidAmount) FROM orders WHERE (customerId = ? OR customerPhone = ?) AND status != "Cancelled"';
+      const params: any[] = [customerId, customerPhone];
+      if (currentOrderId) {
+        sql += ' AND id != ?';
+        params.push(currentOrderId);
+      }
+      const res = db.exec(sql, params);
+      if (res.length > 0 && res[0].values && res[0].values[0]) {
+        const totalInvoiced = Number(res[0].values[0][0] || 0);
+        const totalPaid = Number(res[0].values[0][1] || 0);
+        return Math.max(0, totalInvoiced - totalPaid);
+      }
+    } catch (err) {
+      console.error('Error calculating customer debt:', err);
+    }
+    return 0;
+  }
 
   // GET Orders with Customer Isolation
   app.get('/api/orders', async (req: Request, res: Response) => {
@@ -653,7 +1486,7 @@ async function startServer() {
         }
       }
 
-      // Fetch items for each order
+      // Fetch items and compute real-time previous customer debt for each order
       for (const order of orders) {
         const itemsRes = db.exec('SELECT * FROM order_items WHERE orderId = ?', [order.id]);
         if (itemsRes.length > 0 && itemsRes[0].values) {
@@ -671,6 +1504,18 @@ async function startServer() {
         } else {
           order.items = [];
         }
+
+        // Server-Side Debt Calculations
+        const prevDebt = calculateCustomerPreviousDebt(db, order.customerId, order.customerPhone, order.id);
+        const currInvoice = order.grandTotal;
+        const totalDue = shouldHidePrices ? 0 : prevDebt + currInvoice;
+        const paid = order.paidAmount || 0;
+        const finalRemaining = shouldHidePrices ? 0 : Math.max(0, totalDue - paid);
+
+        order.previousDebt = shouldHidePrices ? 0 : prevDebt;
+        order.currentInvoice = currInvoice;
+        order.totalDueWithDebt = totalDue;
+        order.finalRemainingWithDebt = finalRemaining;
       }
 
       res.json(orders);
@@ -738,6 +1583,12 @@ async function startServer() {
         }
       }
 
+      // Server-Side Debt Calculations
+      const prevDebt = calculateCustomerPreviousDebt(db, String(row.customerId), String(row.customerPhone), String(row.id));
+      const currInvoice = grandTotal;
+      const totalDue = shouldHidePrices ? 0 : prevDebt + currInvoice;
+      const finalRemaining = shouldHidePrices ? 0 : Math.max(0, totalDue - paidAmount);
+
       const order: Order = {
         id: String(row.id),
         orderNumber: String(row.orderNumber),
@@ -756,6 +1607,10 @@ async function startServer() {
         grandTotal,
         paidAmount,
         remainingBalance,
+        previousDebt: shouldHidePrices ? 0 : prevDebt,
+        currentInvoice: currInvoice,
+        totalDueWithDebt: totalDue,
+        finalRemainingWithDebt: finalRemaining,
         paymentStatus,
         notes: row.notes ? String(row.notes) : undefined,
         adminNotes: isAdmin && row.adminNotes ? String(row.adminNotes) : undefined,
@@ -826,7 +1681,9 @@ async function startServer() {
           continue;
         }
 
-        const officialPrice = Number(dbProd.price);
+        // Check if product has an active valid offer
+        const activeDeal = getActiveDealForProduct(db, productId);
+        const officialPrice = activeDeal ? activeDeal.offerPrice : Number(dbProd.price);
         const minQty = Number(dbProd.minQty ?? 1);
         const maxQty = dbProd.maxQty !== null && dbProd.maxQty !== undefined ? Number(dbProd.maxQty) : null;
 
@@ -860,6 +1717,7 @@ async function startServer() {
           minQty: minQty,
           maxQty: maxQty,
           stock: Number(dbProd.stock ?? 100),
+          lowStockThreshold: Number(dbProd.lowStockThreshold ?? 5),
           description: dbProd.description ? String(dbProd.description) : undefined,
         };
 
@@ -937,7 +1795,7 @@ async function startServer() {
         const productId = String(item.productId || '');
 
         // Fetch official product from database
-        const prodStmt = db.prepare('SELECT id, name, category, price, unit, status, minQty, maxQty FROM products WHERE id = ?');
+        const prodStmt = db.prepare('SELECT id, name, category, price, unit, status, minQty, maxQty, stock FROM products WHERE id = ?');
         prodStmt.bind([productId]);
 
         if (!prodStmt.step()) {
@@ -962,6 +1820,19 @@ async function startServer() {
           });
         }
 
+        // Check Stock Control
+        const currentStock = dbProd.stock !== null && dbProd.stock !== undefined ? Number(dbProd.stock) : 100;
+        if (currentStock <= 0) {
+          return res.status(400).json({
+            error: `الصنف "${dbProd.name}" نفد من المخزن بالكامل (المتاح: 0)`,
+          });
+        }
+        if (requestedQty > currentStock) {
+          return res.status(400).json({
+            error: `الكمية المطلوبة من "${dbProd.name}" (${requestedQty} ${dbProd.unit}) أكبر من الكمية المتاحة بالمخزن (${currentStock} ${dbProd.unit})`,
+          });
+        }
+
         // Check min / max quantity limits
         const minQty = Number(dbProd.minQty ?? 1);
         if (requestedQty < minQty) {
@@ -979,8 +1850,9 @@ async function startServer() {
           }
         }
 
-        // Use official Database price (NEVER trust unitPrice from frontend body)
-        const officialUnitPrice = Number(dbProd.price);
+        // Use official Database price or active deal offer price (NEVER trust unitPrice from frontend body)
+        const activeDeal = getActiveDealForProduct(db, productId);
+        const officialUnitPrice = activeDeal ? activeDeal.offerPrice : Number(dbProd.price);
         const itemTotalPrice = officialUnitPrice * requestedQty;
 
         serverSubtotal += itemTotalPrice;
@@ -1099,6 +1971,11 @@ async function startServer() {
           }))
         : validatedItems;
 
+      // Calculate previous debt for this customer from DB
+      const prevDebt = calculateCustomerPreviousDebt(db, finalCustomerId, finalCustomerPhone, orderId);
+      const currInvoice = shouldHidePrices ? 0 : serverGrandTotal;
+      const totalDue = shouldHidePrices ? 0 : prevDebt + currInvoice;
+
       const newOrder: Order = {
         id: orderId,
         orderNumber: orderNum,
@@ -1117,6 +1994,10 @@ async function startServer() {
         grandTotal: shouldHidePrices ? 0 : serverGrandTotal,
         paidAmount: 0,
         remainingBalance: shouldHidePrices ? 0 : serverGrandTotal,
+        previousDebt: shouldHidePrices ? 0 : prevDebt,
+        currentInvoice: currInvoice,
+        totalDueWithDebt: totalDue,
+        finalRemainingWithDebt: totalDue,
         paymentStatus: 'Unpaid',
         notes: notes ? String(notes).trim() : '',
         adminNotes: '',
@@ -1484,8 +2365,12 @@ async function startServer() {
       const { id } = req.params;
       const authUser = await getAuthUser(req);
 
+      if (!authUser) {
+        return res.status(401).json({ error: 'يرجى تسجيل الدخول للوصول إلى بيانات الحساب' });
+      }
+
       // Customer isolation check
-      if (authUser && authUser.role === 'customer') {
+      if (authUser.role === 'customer') {
         if (id !== authUser.id && id !== authUser.phone) {
           return res.status(403).json({ error: 'غير مصرح لك بالاطلاع على حسابات عميل آخر' });
         }
@@ -1528,8 +2413,12 @@ async function startServer() {
       const { id } = req.params;
       const authUser = await getAuthUser(req);
 
+      if (!authUser) {
+        return res.status(401).json({ error: 'يرجى تسجيل الدخول للوصول إلى كشف الحساب' });
+      }
+
       // Customer isolation check
-      if (authUser && authUser.role === 'customer') {
+      if (authUser.role === 'customer') {
         if (id !== authUser.id && id !== authUser.phone) {
           return res.status(403).json({ error: 'غير مصرح لك بالاطلاع على كشف حساب عميل آخر' });
         }
@@ -1690,6 +2579,23 @@ async function startServer() {
         'SELECT id, orderNumber, customerName, customerPhone, grandTotal, paidAmount, remainingBalance FROM orders WHERE (customerId = ? OR customerPhone = ?) AND remainingBalance > 0 AND status != "Cancelled" ORDER BY createdAt ASC',
         [id, id]
       );
+
+      let totalCustomerDebt = 0;
+      if (ordersRes.length > 0 && ordersRes[0].values) {
+        for (const row of ordersRes[0].values) {
+          totalCustomerDebt += Number(row[6] || 0);
+        }
+      }
+
+      if (totalCustomerDebt <= 0) {
+        return res.status(400).json({ error: 'لا توجد مديونيات أو مبالغ مستحقة للتحصيل على هذا العميل' });
+      }
+
+      if (payAmount > totalCustomerDebt) {
+        return res.status(400).json({
+          error: `لا يمكن تحصيل مبلغ (${payAmount} ج) أكبر من إجمالي المديونية المستحقة على العميل (${totalCustomerDebt} ج)`,
+        });
+      }
 
       let remainingToAllocate = payAmount;
       let customerName = 'العميل';

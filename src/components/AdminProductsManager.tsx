@@ -32,8 +32,11 @@ export const AdminProductsManager: React.FC<AdminProductsManagerProps> = ({
   const [searchQuery, setSearchQuery] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState<'all' | 'open' | 'locked' | 'hidden'>('all');
+  const [stockFilter, setStockFilter] = useState<'all' | 'lowStock' | 'outOfStock'>('all');
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [editingProduct, setEditingProduct] = useState<Partial<Product> | null>(null);
+  const [quickStockEditProduct, setQuickStockEditProduct] = useState<Product | null>(null);
+  const [quickStockValue, setQuickStockValue] = useState<number>(0);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
@@ -49,6 +52,13 @@ export const AdminProductsManager: React.FC<AdminProductsManagerProps> = ({
   const filteredProducts = products.filter((p) => {
     if (categoryFilter !== 'all' && p.category !== categoryFilter) return false;
     if (statusFilter !== 'all' && (p.status || 'open') !== statusFilter) return false;
+    
+    // Stock filter
+    const threshold = p.lowStockThreshold || 5;
+    const currentStock = p.stock ?? 0;
+    if (stockFilter === 'lowStock' && (currentStock > threshold || currentStock <= 0)) return false;
+    if (stockFilter === 'outOfStock' && currentStock > 0) return false;
+
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase().trim();
       return p.name.toLowerCase().includes(q) || p.category.toLowerCase().includes(q);
@@ -188,6 +198,27 @@ export const AdminProductsManager: React.FC<AdminProductsManagerProps> = ({
       if (res.ok) {
         setIsModalOpen(false);
         setEditingProduct(null);
+        onRefreshData();
+      }
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleSaveQuickStock = async () => {
+    if (!quickStockEditProduct) return;
+    try {
+      setLoading(true);
+      const res = await apiFetch(`/api/products/${encodeURIComponent(quickStockEditProduct.id)}/stock`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ stock: quickStockValue }),
+      });
+      if (res.ok) {
+        showToast(`تم تحديث مخزون "${quickStockEditProduct.name}" إلى ${quickStockValue} ${quickStockEditProduct.unit}`);
+        setQuickStockEditProduct(null);
         onRefreshData();
       }
     } catch (err) {
@@ -478,6 +509,7 @@ export const AdminProductsManager: React.FC<AdminProductsManagerProps> = ({
                   <th className="p-3">المنتج</th>
                   <th className="p-3">التصنيف</th>
                   <th className="p-3">السعر والوحدة</th>
+                  <th className="p-3">المخزون والتوريد</th>
                   <th className="p-3">حدود الكميات</th>
                   <th className="p-3">الحالة الحالية</th>
                   <th className="p-3 text-center">تغيير سريع</th>
@@ -487,13 +519,17 @@ export const AdminProductsManager: React.FC<AdminProductsManagerProps> = ({
               <tbody className="divide-y divide-gray-100">
                 {filteredProducts.map((p) => {
                   const isSelected = selectedIds.includes(p.id);
+                  const currentStock = p.stock !== undefined ? p.stock : 100;
+                  const threshold = p.lowStockThreshold || 5;
+                  const isOutOfStock = currentStock <= 0;
+                  const isLowStock = !isOutOfStock && currentStock <= threshold;
 
                   return (
                     <tr
                       key={p.id}
                       className={`hover:bg-slate-50 transition-colors ${
                         isSelected ? 'bg-emerald-50/40' : ''
-                      }`}
+                      } ${isOutOfStock ? 'bg-red-50/20' : isLowStock ? 'bg-amber-50/30' : ''}`}
                     >
                       <td className="p-3 text-center">
                         <button
@@ -513,13 +549,27 @@ export const AdminProductsManager: React.FC<AdminProductsManagerProps> = ({
                           <img
                             src={p.image}
                             alt={p.name}
-                            className="w-8 h-8 rounded-md object-cover bg-slate-100 border border-gray-200 shrink-0"
+                            className="w-9 h-9 rounded-md object-cover bg-slate-100 border border-gray-200 shrink-0"
                             onError={(e) => {
                               (e.target as HTMLElement).style.display = 'none';
                             }}
                           />
                           <div>
-                            <div className="font-bold text-slate-800 text-xs">{p.name}</div>
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <span className="font-bold text-slate-900 text-xs">{p.name}</span>
+                              {isOutOfStock && (
+                                <span className="px-1.5 py-0.2 rounded-md bg-red-100 text-red-700 text-[10px] font-black border border-red-200 flex items-center gap-0.5">
+                                  <AlertTriangle className="w-2.5 h-2.5 text-red-600" />
+                                  نفد المخزون
+                                </span>
+                              )}
+                              {isLowStock && (
+                                <span className="px-1.5 py-0.2 rounded-md bg-amber-100 text-amber-900 text-[10px] font-black border border-amber-300 flex items-center gap-0.5 animate-pulse">
+                                  <AlertTriangle className="w-2.5 h-2.5 text-amber-600" />
+                                  تنبيه توريد ({currentStock} {p.unit})
+                                </span>
+                              )}
+                            </div>
                             {p.description && (
                               <div className="text-[10px] text-slate-400 line-clamp-1">
                                 {p.description}
@@ -536,6 +586,45 @@ export const AdminProductsManager: React.FC<AdminProductsManagerProps> = ({
                           {(p.price || 0).toLocaleString('ar-EG')} ج.م
                         </span>
                         <span className="text-slate-400 text-[10px] block">لكل {p.unit}</span>
+                      </td>
+
+                      {/* Stock & Low Stock Indicator Column */}
+                      <td className="p-3">
+                        <div className="space-y-1">
+                          <div className="flex items-center gap-1.5">
+                            <span className="font-mono font-black text-xs text-slate-800">
+                              {currentStock}
+                            </span>
+                            <span className="text-slate-500 text-[10px]">{p.unit}</span>
+                            <button
+                              onClick={() => {
+                                setQuickStockEditProduct(p);
+                                setQuickStockValue(currentStock);
+                              }}
+                              className="px-1.5 py-0.5 rounded bg-slate-100 hover:bg-slate-200 text-slate-700 text-[10px] font-bold transition-colors"
+                              title="تعديل سريع لكمية المخزون"
+                            >
+                              تعديل
+                            </button>
+                          </div>
+
+                          {isOutOfStock ? (
+                            <div className="text-[10px] font-black text-red-600 flex items-center gap-1">
+                              <span className="w-1.5 h-1.5 rounded-full bg-red-600 inline-block"></span>
+                              <span>غير متوفر بالمستودع</span>
+                            </div>
+                          ) : isLowStock ? (
+                            <div className="text-[10px] font-black text-amber-700 flex items-center gap-1">
+                              <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-ping inline-block"></span>
+                              <span>منخفض (حد التوريد: {threshold})</span>
+                            </div>
+                          ) : (
+                            <div className="text-[10px] font-bold text-emerald-700 flex items-center gap-1">
+                              <span className="w-1.5 h-1.5 rounded-full bg-emerald-600 inline-block"></span>
+                              <span>متوفر كافٍ</span>
+                            </div>
+                          )}
+                        </div>
                       </td>
 
                       <td className="p-3 text-slate-600 text-[11px]">
@@ -790,6 +879,31 @@ export const AdminProductsManager: React.FC<AdminProductsManagerProps> = ({
                 </div>
               </div>
 
+              {/* Low Stock Warning Threshold */}
+              <div className="bg-amber-50/60 p-2.5 rounded-lg border border-amber-200/80">
+                <label className="block font-bold text-amber-900 mb-1 flex items-center gap-1">
+                  <AlertTriangle className="w-3.5 h-3.5 text-amber-600" />
+                  <span>حد التنبيه لانخفاض المخزون (طلب توريد):</span>
+                </label>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="number"
+                    min={1}
+                    value={editingProduct.lowStockThreshold || 5}
+                    onChange={(e) =>
+                      setEditingProduct({
+                        ...editingProduct,
+                        lowStockThreshold: Math.max(1, parseInt(e.target.value) || 5),
+                      })
+                    }
+                    className="w-24 bg-white border border-amber-300 rounded-md p-1.5 text-slate-900 font-bold text-right"
+                  />
+                  <span className="text-[11px] text-amber-800">
+                    وحدات ({editingProduct.unit || 'كرتونة'}) — يظهر تنبيه مرئي عند وصول المخزون لهذا الحد أو أقل
+                  </span>
+                </div>
+              </div>
+
               {/* Quantity Limits */}
               <div className="grid grid-cols-2 gap-3 bg-slate-50 p-2.5 rounded-lg border border-gray-100">
                 <div>
@@ -876,6 +990,98 @@ export const AdminProductsManager: React.FC<AdminProductsManagerProps> = ({
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Quick Stock Adjustment Modal */}
+      {quickStockEditProduct && (
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-fadeIn">
+          <div className="bg-white border border-gray-200 rounded-2xl max-w-sm w-full p-5 text-right shadow-2xl text-slate-800 relative animate-scaleUp">
+            <button
+              onClick={() => setQuickStockEditProduct(null)}
+              className="absolute top-4 left-4 text-slate-400 hover:text-slate-700 p-1"
+            >
+              <X className="w-4 h-4" />
+            </button>
+
+            <div className="flex items-center gap-2 mb-3 pb-2 border-b border-gray-100">
+              <Package className="w-5 h-5 text-emerald-600" />
+              <div>
+                <h4 className="font-bold text-sm text-slate-900">تعديل سريع لمخزون الصنف</h4>
+                <p className="text-[11px] text-slate-500 line-clamp-1">{quickStockEditProduct.name}</p>
+              </div>
+            </div>
+
+            <div className="space-y-3 text-xs">
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">
+                  الكمية الفعلية المتاحة في المخزن ({quickStockEditProduct.unit || 'كرتونة'}):
+                </label>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setQuickStockValue(Math.max(0, quickStockValue - 5))}
+                    className="w-8 h-8 rounded-lg bg-slate-100 hover:bg-slate-200 font-black text-slate-700 flex items-center justify-center text-sm"
+                  >
+                    -5
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setQuickStockValue(Math.max(0, quickStockValue - 1))}
+                    className="w-8 h-8 rounded-lg bg-slate-100 hover:bg-slate-200 font-black text-slate-700 flex items-center justify-center text-sm"
+                  >
+                    -1
+                  </button>
+                  <input
+                    type="number"
+                    min={0}
+                    value={quickStockValue}
+                    onChange={(e) => setQuickStockValue(Math.max(0, parseInt(e.target.value) || 0))}
+                    className="flex-1 bg-slate-50 border-2 border-emerald-500 rounded-lg p-2 text-center font-mono font-black text-base text-slate-900 focus:outline-none"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setQuickStockValue(quickStockValue + 1)}
+                    className="w-8 h-8 rounded-lg bg-slate-100 hover:bg-slate-200 font-black text-slate-700 flex items-center justify-center text-sm"
+                  >
+                    +1
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setQuickStockValue(quickStockValue + 10)}
+                    className="w-8 h-8 rounded-lg bg-slate-100 hover:bg-slate-200 font-black text-slate-700 flex items-center justify-center text-sm"
+                  >
+                    +10
+                  </button>
+                </div>
+              </div>
+
+              {quickStockValue <= (quickStockEditProduct.lowStockThreshold || 5) && (
+                <div className="bg-amber-50 border border-amber-200 text-amber-900 p-2 rounded-lg text-[11px] flex items-center gap-1.5 font-bold">
+                  <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+                  <span>تنبيه: هذه الكمية تقع تحت حد التوريد ({quickStockEditProduct.lowStockThreshold || 5} وحدات).</span>
+                </div>
+              )}
+
+              <div className="pt-3 border-t border-gray-100 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setQuickStockEditProduct(null)}
+                  className="px-3.5 py-1.5 rounded-lg bg-slate-100 text-slate-600 font-bold text-xs hover:bg-slate-200"
+                >
+                  إلغاء
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSaveQuickStock}
+                  disabled={loading}
+                  className="px-5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-xs disabled:opacity-50"
+                >
+                  {loading ? 'جاري الحفظ...' : 'تحديث المخزون الآن'}
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}

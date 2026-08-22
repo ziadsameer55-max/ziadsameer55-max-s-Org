@@ -23,6 +23,12 @@ import {
   TrendingDown,
   Receipt,
   Share2,
+  KeyRound,
+  Lock,
+  Edit3,
+  Calendar,
+  Layers,
+  Save,
 } from 'lucide-react';
 import { apiFetch } from '../utils/api';
 import { PrintStatementModal } from './PrintStatementModal';
@@ -48,7 +54,7 @@ export const CustomerAccount: React.FC<CustomerAccountProps> = ({
   onReorder,
   onPrintReceipt,
 }) => {
-  const [activeSubTab, setActiveSubTab] = useState<'orders' | 'payments' | 'statement'>('orders');
+  const [activeSubTab, setActiveSubTab] = useState<'orders' | 'payments' | 'statement' | 'profile'>('orders');
   const [statementData, setStatementData] = useState<{
     summary: { totalInvoiced: number; totalPaid: number; totalDebt: number; ordersCount: number; paymentsCount: number };
     orders: Order[];
@@ -57,6 +63,122 @@ export const CustomerAccount: React.FC<CustomerAccountProps> = ({
   const [loadingStatement, setLoadingStatement] = useState(false);
   const [expandedOrderId, setExpandedOrderId] = useState<string | null>(null);
   const [isPrintStatementModalOpen, setIsPrintStatementModalOpen] = useState(false);
+
+  // Profile Edit State
+  const [isEditingProfile, setIsEditingProfile] = useState(false);
+  const [editFullName, setEditFullName] = useState(user?.fullName || '');
+  const [editStoreName, setEditStoreName] = useState(user?.storeName || '');
+  const [editAddress, setEditAddress] = useState(user?.address || '');
+  const [profileSaving, setProfileSaving] = useState(false);
+  const [profileMsg, setProfileMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+
+  // Password Change State
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [passwordSaving, setPasswordSaving] = useState(false);
+  const [passwordMsg, setPasswordMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+
+  // Sync profile fields if user changes
+  useEffect(() => {
+    if (user) {
+      setEditFullName(user.fullName);
+      setEditStoreName(user.storeName || '');
+      setEditAddress(user.address || '');
+    }
+  }, [user]);
+
+  const handleUpdateProfile = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setProfileMsg(null);
+    setProfileSaving(true);
+    try {
+      const res = await apiFetch('/api/auth/profile', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          fullName: editFullName,
+          storeName: editStoreName,
+          address: editAddress,
+        }),
+      });
+      const data = await res.json();
+      if (data.success && data.user) {
+        setProfileMsg({ type: 'success', text: 'تم تحديث بيانات الحساب بنجاح' });
+        setIsEditingProfile(false);
+        // update local storage
+        try {
+          const stored = localStorage.getItem('halim_user');
+          if (stored) {
+            const parsed = JSON.parse(stored);
+            localStorage.setItem('halim_user', JSON.stringify({ ...parsed, ...data.user }));
+          }
+        } catch {}
+      } else {
+        setProfileMsg({ type: 'error', text: data.error || 'تعذر تحديث البيانات' });
+      }
+    } catch {
+      setProfileMsg({ type: 'error', text: 'حدث خطأ أثناء الاتصال بالخادم' });
+    } finally {
+      setProfileSaving(false);
+    }
+  };
+
+  const handleChangePassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setPasswordMsg(null);
+
+    if (newPassword !== confirmPassword) {
+      setPasswordMsg({ type: 'error', text: 'كلمة المرور وتأكيدها غير متطابقين' });
+      return;
+    }
+
+    if (newPassword.length < 6) {
+      setPasswordMsg({ type: 'error', text: 'كلمة المرور الجديدة يجب ألا تقل عن 6 خانات' });
+      return;
+    }
+
+    setPasswordSaving(true);
+    try {
+      const res = await apiFetch('/api/auth/change-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          currentPassword,
+          newPassword,
+          confirmPassword,
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setPasswordMsg({ type: 'success', text: data.message || 'تم تغيير كلمة المرور بنجاح' });
+        setCurrentPassword('');
+        setNewPassword('');
+        setConfirmPassword('');
+      } else {
+        setPasswordMsg({ type: 'error', text: data.error || 'تعذر تغيير كلمة المرور' });
+      }
+    } catch {
+      setPasswordMsg({ type: 'error', text: 'حدث خطأ أثناء الاتصال بالخادم' });
+    } finally {
+      setPasswordSaving(false);
+    }
+  };
+
+  const handleLogoutAllDevices = async () => {
+    if (window.confirm('هل تريد بالتأكيد تسجيل الخروج من كافة الأجهزة والهواتف الأخرى؟')) {
+      try {
+        const res = await apiFetch('/api/auth/logout-all', { method: 'POST' });
+        const data = await res.json();
+        if (data.success) {
+          alert('تم إلغاء الجلسات وتسجيل الخروج من جميع الأجهزة بنجاح');
+          onLogout();
+        }
+      } catch {
+        alert('تعذر إتمام العملية');
+      }
+    }
+  };
 
   // Fetch detailed customer statement
   useEffect(() => {
@@ -310,11 +432,11 @@ export const CustomerAccount: React.FC<CustomerAccountProps> = ({
         </div>
       </div>
 
-      {/* 3. Sub-Navigation Tabs: Orders / Payments / Statement */}
-      <div className="flex items-center bg-white border border-slate-200 rounded-2xl p-1 shadow-2xs">
+      {/* 3. Sub-Navigation Tabs: Orders / Payments / Statement / Profile */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 bg-white border border-slate-200 rounded-2xl p-1 shadow-2xs">
         <button
           onClick={() => setActiveSubTab('orders')}
-          className={`flex-1 py-2.5 rounded-xl font-bold text-xs transition-colors flex items-center justify-center gap-1.5 ${
+          className={`py-2 px-2 rounded-xl font-bold text-xs transition-colors flex items-center justify-center gap-1.5 ${
             activeSubTab === 'orders'
               ? 'bg-emerald-800 text-white shadow-2xs'
               : 'text-slate-600 hover:text-slate-900'
@@ -326,19 +448,19 @@ export const CustomerAccount: React.FC<CustomerAccountProps> = ({
 
         <button
           onClick={() => setActiveSubTab('payments')}
-          className={`flex-1 py-2.5 rounded-xl font-bold text-xs transition-colors flex items-center justify-center gap-1.5 ${
+          className={`py-2 px-2 rounded-xl font-bold text-xs transition-colors flex items-center justify-center gap-1.5 ${
             activeSubTab === 'payments'
               ? 'bg-emerald-800 text-white shadow-2xs'
               : 'text-slate-600 hover:text-slate-900'
           }`}
         >
           <CreditCard className="w-3.5 h-3.5" />
-          <span>سجل المدفوعات ({paymentsList.length})</span>
+          <span>المدفوعات ({paymentsList.length})</span>
         </button>
 
         <button
           onClick={() => setActiveSubTab('statement')}
-          className={`flex-1 py-2.5 rounded-xl font-bold text-xs transition-colors flex items-center justify-center gap-1.5 ${
+          className={`py-2 px-2 rounded-xl font-bold text-xs transition-colors flex items-center justify-center gap-1.5 ${
             activeSubTab === 'statement'
               ? 'bg-emerald-800 text-white shadow-2xs'
               : 'text-slate-600 hover:text-slate-900'
@@ -346,6 +468,18 @@ export const CustomerAccount: React.FC<CustomerAccountProps> = ({
         >
           <FileText className="w-3.5 h-3.5" />
           <span>كشف الحساب</span>
+        </button>
+
+        <button
+          onClick={() => setActiveSubTab('profile')}
+          className={`py-2 px-2 rounded-xl font-bold text-xs transition-colors flex items-center justify-center gap-1.5 ${
+            activeSubTab === 'profile'
+              ? 'bg-emerald-800 text-white shadow-2xs'
+              : 'text-slate-600 hover:text-slate-900'
+          }`}
+        >
+          <ShieldCheck className="w-3.5 h-3.5" />
+          <span>بياناتي والأمان</span>
         </button>
       </div>
 
@@ -469,10 +603,11 @@ export const CustomerAccount: React.FC<CustomerAccountProps> = ({
                       <div className="grid grid-cols-2 gap-2 pt-2 border-t border-slate-200">
                         <button
                           onClick={() => onReorder(order)}
-                          className="py-2.5 bg-emerald-800 hover:bg-emerald-900 text-white text-xs font-bold rounded-xl flex items-center justify-center gap-1.5 shadow-2xs"
+                          className="py-2.5 bg-emerald-800 hover:bg-emerald-900 text-white text-xs font-bold rounded-xl flex items-center justify-center gap-1.5 shadow-2xs transition-all active:scale-95"
+                          title="إعادة إضافة جميع أصناف هذا الطلب إلى سلة المشتريات"
                         >
                           <RotateCcw className="w-3.5 h-3.5" />
-                          <span>تكرار الطلب للسلة</span>
+                          <span>🔄 إعادة الطلب</span>
                         </button>
 
                         <button
@@ -623,6 +758,258 @@ export const CustomerAccount: React.FC<CustomerAccountProps> = ({
             <span className={`text-sm sm:text-base font-mono ${currentDebt > 0 ? 'text-red-700' : 'text-emerald-800'}`}>
               {(currentDebt || 0).toLocaleString('ar-EG')} جنيه مصري
             </span>
+          </div>
+        </div>
+      )}
+
+      {/* SubTab 4: Profile & Security Management */}
+      {activeSubTab === 'profile' && (
+        <div className="space-y-4">
+          {/* Account Overview & Identification */}
+          <div className="bg-white border border-slate-200 rounded-3xl p-5 shadow-xs space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-xl bg-emerald-100 text-emerald-800 flex items-center justify-center font-bold">
+                  <UserIcon className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-black text-slate-900">بيانات الحساب والملف التجاري</h3>
+                  <p className="text-[11px] text-slate-500 font-bold">المعلومات المعتمدة لمتجرك في شركة الحليم</p>
+                </div>
+              </div>
+
+              {!isEditingProfile ? (
+                <button
+                  type="button"
+                  onClick={() => setIsEditingProfile(true)}
+                  className="py-1.5 px-3 rounded-xl bg-slate-100 hover:bg-emerald-50 text-slate-700 hover:text-emerald-800 text-xs font-bold transition-colors flex items-center gap-1"
+                >
+                  <Edit3 className="w-3.5 h-3.5" />
+                  <span>تعديل البيانات</span>
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setIsEditingProfile(false)}
+                  className="text-xs text-slate-400 hover:text-slate-600 font-bold"
+                >
+                  إلغاء
+                </button>
+              )}
+            </div>
+
+            {profileMsg && (
+              <div
+                className={`p-3 rounded-2xl text-xs font-bold flex items-center gap-2 ${
+                  profileMsg.type === 'success'
+                    ? 'bg-emerald-50 text-emerald-800 border border-emerald-200'
+                    : 'bg-rose-50 text-rose-800 border border-rose-200'
+                }`}
+              >
+                <AlertCircle className="w-4 h-4 shrink-0" />
+                <span>{profileMsg.text}</span>
+              </div>
+            )}
+
+            {!isEditingProfile ? (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                <div className="p-3 bg-slate-50 rounded-2xl border border-slate-100">
+                  <div className="text-[10px] font-bold text-slate-400">اسم المحل / الشركة</div>
+                  <div className="text-xs font-black text-slate-800 mt-0.5">{user.storeName || 'محل تجاري'}</div>
+                </div>
+
+                <div className="p-3 bg-slate-50 rounded-2xl border border-slate-100">
+                  <div className="text-[10px] font-bold text-slate-400">اسم المسؤول / العميل</div>
+                  <div className="text-xs font-black text-slate-800 mt-0.5">{user.fullName}</div>
+                </div>
+
+                <div className="p-3 bg-slate-50 rounded-2xl border border-slate-100">
+                  <div className="text-[10px] font-bold text-slate-400">رقم الهاتف (اسم المستخدم)</div>
+                  <div className="text-xs font-black text-slate-800 mt-0.5 font-mono">{user.phone}</div>
+                </div>
+
+                <div className="p-3 bg-slate-50 rounded-2xl border border-slate-100">
+                  <div className="text-[10px] font-bold text-slate-400">العنوان والمنطقة</div>
+                  <div className="text-xs font-black text-slate-800 mt-0.5">{user.address || 'محافظة الإسكندرية'}</div>
+                </div>
+
+                <div className="p-3 bg-slate-50 rounded-2xl border border-slate-100">
+                  <div className="text-[10px] font-bold text-slate-400">حالة ونوع الحساب</div>
+                  <div className="text-xs font-black text-emerald-800 mt-0.5">عميل جملة معتمد ومسجل</div>
+                </div>
+
+                <div className="p-3 bg-slate-50 rounded-2xl border border-slate-100">
+                  <div className="text-[10px] font-bold text-slate-400">معرف العميل في المنظومة</div>
+                  <div className="text-xs font-bold text-slate-600 mt-0.5 font-mono">{user.id}</div>
+                </div>
+              </div>
+            ) : (
+              <form onSubmit={handleUpdateProfile} className="space-y-3">
+                <div>
+                  <label className="block text-xs font-black text-slate-700 mb-1">اسم المحل / المنشأة</label>
+                  <input
+                    type="text"
+                    required
+                    value={editStoreName}
+                    onChange={(e) => setEditStoreName(e.target.value)}
+                    className="w-full bg-slate-50 border border-slate-200 focus:border-emerald-700 focus:bg-white rounded-2xl px-3.5 py-2 text-xs font-bold text-slate-800 focus:outline-none"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-black text-slate-700 mb-1">اسم العميل بالكامل</label>
+                  <input
+                    type="text"
+                    required
+                    value={editFullName}
+                    onChange={(e) => setEditFullName(e.target.value)}
+                    className="w-full bg-slate-50 border border-slate-200 focus:border-emerald-700 focus:bg-white rounded-2xl px-3.5 py-2 text-xs font-bold text-slate-800 focus:outline-none"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-black text-slate-700 mb-1">العنوان / المنطقة</label>
+                  <input
+                    type="text"
+                    required
+                    value={editAddress}
+                    onChange={(e) => setEditAddress(e.target.value)}
+                    className="w-full bg-slate-50 border border-slate-200 focus:border-emerald-700 focus:bg-white rounded-2xl px-3.5 py-2 text-xs font-bold text-slate-800 focus:outline-none"
+                  />
+                </div>
+
+                <div className="p-2.5 bg-amber-50 rounded-xl text-[11px] font-bold text-amber-800">
+                  ملاحظة أمان: لا يمكن تعديل رقم الهاتف أو صلاحيات الحساب أو الأرصدة المالية من هذه الشاشة.
+                </div>
+
+                <div className="flex items-center gap-2 pt-1">
+                  <button
+                    type="submit"
+                    disabled={profileSaving}
+                    className="flex-1 py-2.5 bg-emerald-800 hover:bg-emerald-900 text-white font-black text-xs rounded-xl shadow-xs flex items-center justify-center gap-1.5 transition-colors"
+                  >
+                    <Save className="w-3.5 h-3.5" />
+                    <span>{profileSaving ? 'جاري الحفظ...' : 'حفظ التعديلات'}</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setIsEditingProfile(false)}
+                    className="py-2.5 px-4 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl transition-colors"
+                  >
+                    إلغاء
+                  </button>
+                </div>
+              </form>
+            )}
+          </div>
+
+          {/* Change Password Card */}
+          <div className="bg-white border border-slate-200 rounded-3xl p-5 shadow-xs space-y-3">
+            <div className="flex items-center gap-2 pb-3 border-b border-slate-100">
+              <div className="w-8 h-8 rounded-xl bg-amber-100 text-amber-800 flex items-center justify-center font-bold">
+                <Lock className="w-4 h-4" />
+              </div>
+              <div>
+                <h3 className="text-sm font-black text-slate-900">تغيير كلمة المرور</h3>
+                <p className="text-[11px] text-slate-500 font-bold">تحديث كلمة السر وإلغاء الجلسات النشطة لحماية الحساب</p>
+              </div>
+            </div>
+
+            {passwordMsg && (
+              <div
+                className={`p-3 rounded-2xl text-xs font-bold flex items-center gap-2 ${
+                  passwordMsg.type === 'success'
+                    ? 'bg-emerald-50 text-emerald-800 border border-emerald-200'
+                    : 'bg-rose-50 text-rose-800 border border-rose-200'
+                }`}
+              >
+                <AlertCircle className="w-4 h-4 shrink-0" />
+                <span>{passwordMsg.text}</span>
+              </div>
+            )}
+
+            <form onSubmit={handleChangePassword} className="space-y-3">
+              <div>
+                <label className="block text-xs font-black text-slate-700 mb-1">كلمة المرور الحالية</label>
+                <input
+                  type="password"
+                  required
+                  value={currentPassword}
+                  onChange={(e) => setCurrentPassword(e.target.value)}
+                  placeholder="أدخل كلمة المرور الحالية..."
+                  className="w-full bg-slate-50 border border-slate-200 focus:border-emerald-700 focus:bg-white rounded-2xl px-3.5 py-2 text-xs font-mono font-bold text-slate-800 focus:outline-none"
+                />
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <div>
+                  <label className="block text-xs font-black text-slate-700 mb-1">كلمة المرور الجديدة</label>
+                  <input
+                    type="password"
+                    required
+                    value={newPassword}
+                    onChange={(e) => setNewPassword(e.target.value)}
+                    placeholder="6 خانات على الأقل..."
+                    className="w-full bg-slate-50 border border-slate-200 focus:border-emerald-700 focus:bg-white rounded-2xl px-3.5 py-2 text-xs font-mono font-bold text-slate-800 focus:outline-none"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-black text-slate-700 mb-1">تأكيد كلمة المرور الجديدة</label>
+                  <input
+                    type="password"
+                    required
+                    value={confirmPassword}
+                    onChange={(e) => setConfirmPassword(e.target.value)}
+                    placeholder="أعد إدخال كلمة المرور..."
+                    className="w-full bg-slate-50 border border-slate-200 focus:border-emerald-700 focus:bg-white rounded-2xl px-3.5 py-2 text-xs font-mono font-bold text-slate-800 focus:outline-none"
+                  />
+                </div>
+              </div>
+
+              <button
+                type="submit"
+                disabled={passwordSaving}
+                className="w-full py-2.5 bg-slate-900 hover:bg-slate-800 text-white font-black text-xs rounded-xl shadow-xs flex items-center justify-center gap-1.5 transition-colors"
+              >
+                <KeyRound className="w-3.5 h-3.5" />
+                <span>{passwordSaving ? 'جاري التحقق والتحديث...' : 'تحديث كلمة المرور'}</span>
+              </button>
+            </form>
+          </div>
+
+          {/* Session Security & Logouts */}
+          <div className="bg-white border border-slate-200 rounded-3xl p-5 shadow-xs space-y-3">
+            <div className="flex items-center gap-2 pb-3 border-b border-slate-100">
+              <div className="w-8 h-8 rounded-xl bg-rose-100 text-rose-800 flex items-center justify-center font-bold">
+                <ShieldCheck className="w-4 h-4" />
+              </div>
+              <div>
+                <h3 className="text-sm font-black text-slate-900">إدارة الجلسات وتسجيل الخروج</h3>
+                <p className="text-[11px] text-slate-500 font-bold">إلغاء صلاحية الوصول وحماية الحساب من الاختراق</p>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
+              <button
+                type="button"
+                onClick={handleLogoutAllDevices}
+                className="py-3 px-3 bg-rose-50 hover:bg-rose-100 border border-rose-200 text-rose-900 font-bold text-xs rounded-2xl transition-colors flex items-center justify-center gap-2 text-center"
+              >
+                <ShieldCheck className="w-4 h-4 text-rose-700" />
+                <span>تسجيل الخروج من كافة الأجهزة</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={onLogout}
+                className="py-3 px-3 bg-slate-100 hover:bg-slate-200 border border-slate-200 text-slate-800 font-bold text-xs rounded-2xl transition-colors flex items-center justify-center gap-2 text-center"
+              >
+                <LogOut className="w-4 h-4 text-slate-600" />
+                <span>تسجيل الخروج من هذا الجهاز</span>
+              </button>
+            </div>
           </div>
         </div>
       )}

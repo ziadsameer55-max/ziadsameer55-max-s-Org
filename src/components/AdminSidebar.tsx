@@ -13,6 +13,7 @@ import {
   UserCheck,
   X,
   ExternalLink,
+  Sparkles,
 } from 'lucide-react';
 
 interface AdminSidebarProps {
@@ -64,6 +65,13 @@ export const AdminSidebar: React.FC<AdminSidebarProps> = ({
       icon: Package,
       badge: `${products.length} صنف`,
       badgeColor: 'bg-slate-700 text-slate-300',
+    },
+    {
+      id: 'admin-deals',
+      label: 'إدارة العروض والخصومات',
+      icon: Sparkles,
+      badge: 'عروض 🔥',
+      badgeColor: 'bg-red-500 text-white font-bold',
     },
     {
       id: 'admin-settings',

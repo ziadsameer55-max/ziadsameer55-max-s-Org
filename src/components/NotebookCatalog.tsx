@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { Product, Category, SystemSettings, User, Order } from '../types';
+import { Product, Category, SystemSettings, User, Order, DealOffer } from '../types';
 import {
   Search,
   ShoppingCart,
@@ -21,6 +21,9 @@ import {
   Tag,
 } from 'lucide-react';
 import { ProductCard } from './ProductCard';
+import { DealsCarousel } from './DealsCarousel';
+import { BestsellersShelf } from './BestsellersShelf';
+import { AllDealsView } from './AllDealsView';
 
 export interface CartItem {
   product: Product;
@@ -33,6 +36,8 @@ interface NotebookCatalogProps {
   settings: SystemSettings | null;
   user: User | null;
   orders?: Order[];
+  deals?: DealOffer[];
+  bestsellers?: Product[];
   isStoreOpen: boolean;
   cart: CartItem[];
   favorites: string[];
@@ -73,6 +78,8 @@ export const NotebookCatalog: React.FC<NotebookCatalogProps> = ({
   settings,
   user,
   orders = [],
+  deals = [],
+  bestsellers = [],
   isStoreOpen,
   cart,
   favorites,
@@ -86,6 +93,7 @@ export const NotebookCatalog: React.FC<NotebookCatalogProps> = ({
   onReorder,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
+  const [showAllDealsView, setShowAllDealsView] = useState(false);
   const [viewMode, setViewMode] = useState<'list' | 'grid'>(() => {
     try {
       const saved = localStorage.getItem('halim_catalog_view_mode');
@@ -103,6 +111,15 @@ export const NotebookCatalog: React.FC<NotebookCatalogProps> = ({
       localStorage.setItem('halim_catalog_view_mode', viewMode);
     } catch {}
   }, [viewMode]);
+
+  // Set of product IDs that have active deals
+  const dealProductIds = useMemo(() => {
+    const ids = new Set<string>();
+    deals.filter((d) => d.isActive && !d.isExpired).forEach((d) => {
+      if (d.productId) ids.add(d.productId);
+    });
+    return ids;
+  }, [deals]);
 
   // Customer previous order items for the "Reorder" quick shelf
   const customerPastItems = useMemo(() => {
@@ -126,8 +143,8 @@ export const NotebookCatalog: React.FC<NotebookCatalogProps> = ({
       if (activeFilterTab === 'favorites' && !favorites.includes(p.id)) {
         return false;
       }
-      if (activeFilterTab === 'offers' && !p.name.includes('عرض') && p.price > 100 && (p.stock > 100 ? false : false)) {
-        // Offer filter
+      if (activeFilterTab === 'offers' && !dealProductIds.has(p.id) && !p.name.includes('عرض')) {
+        return false;
       }
 
       if (selectedCategory !== 'all' && p.category !== selectedCategory) {
@@ -146,7 +163,7 @@ export const NotebookCatalog: React.FC<NotebookCatalogProps> = ({
 
       return true;
     });
-  }, [products, searchQuery, selectedCategory, activeFilterTab, favorites]);
+  }, [products, searchQuery, selectedCategory, activeFilterTab, favorites, dealProductIds]);
 
   const totalItemsCount = cart.length;
   const totalQuantity = cart.reduce((sum, i) => sum + i.quantity, 0);
@@ -156,6 +173,22 @@ export const NotebookCatalog: React.FC<NotebookCatalogProps> = ({
     const item = cart.find((i) => i.product.id === productId);
     return item ? item.quantity : 0;
   };
+
+  if (showAllDealsView) {
+    return (
+      <div className="pb-28 text-right max-w-2xl mx-auto" dir="rtl">
+        <AllDealsView
+          deals={deals}
+          products={products}
+          settings={settings}
+          cartItems={cart}
+          onUpdateCartItem={onUpdateCartItem}
+          onSetCartItemQty={onSetCartItemQty}
+          onBack={() => setShowAllDealsView(false)}
+        />
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-3.5 pb-28 text-right max-w-2xl mx-auto" dir="rtl">
@@ -237,7 +270,7 @@ export const NotebookCatalog: React.FC<NotebookCatalogProps> = ({
         </div>
       </div>
 
-      {/* 4. Horizontal Category Scroller with Emojis */}
+      {/* 4. Horizontal Category Scroller with Emojis & Offers Quick Chip */}
       <div className="flex items-center gap-1.5 overflow-x-auto pb-1 scrollbar-none text-xs select-none">
         <button
           onClick={() => {
@@ -255,6 +288,28 @@ export const NotebookCatalog: React.FC<NotebookCatalogProps> = ({
             ({products.filter((p) => p.status !== 'hidden').length})
           </span>
         </button>
+
+        {/* Deals and Offers Quick Chip */}
+        {deals.length > 0 && (
+          <button
+            onClick={() => {
+              if (activeFilterTab === 'offers') {
+                setActiveFilterTab('all');
+              } else {
+                setActiveFilterTab('offers');
+                onSelectCategory('all');
+              }
+            }}
+            className={`px-3 py-2 rounded-xl font-bold whitespace-nowrap transition-all shrink-0 text-xs flex items-center gap-1 shadow-2xs ${
+              activeFilterTab === 'offers'
+                ? 'bg-red-600 text-white animate-pulse'
+                : 'bg-gradient-to-r from-amber-50 to-orange-50 text-amber-900 border border-amber-300 hover:bg-amber-100'
+            }`}
+          >
+            <Flame className={`w-3.5 h-3.5 ${activeFilterTab === 'offers' ? 'text-white' : 'text-red-500 fill-red-500'}`} />
+            <span>عروض وفرص ({deals.filter((d) => d.isActive && !d.isExpired).length})</span>
+          </button>
+        )}
 
         {/* Favorite Filter Chip */}
         <button
@@ -300,6 +355,30 @@ export const NotebookCatalog: React.FC<NotebookCatalogProps> = ({
           );
         })}
       </div>
+
+      {/* 5. Offers & Deals Carousel (Top of Home Catalog) */}
+      {!searchQuery && selectedCategory === 'all' && activeFilterTab === 'all' && deals.length > 0 && (
+        <DealsCarousel
+          deals={deals}
+          products={products}
+          settings={settings}
+          cartItems={cart}
+          onUpdateCartItem={onUpdateCartItem}
+          onSetCartItemQty={onSetCartItemQty}
+          onViewAllDeals={() => setShowAllDealsView(true)}
+        />
+      )}
+
+      {/* 6. Most Requested Shelf (الأكثر طلباً - الأعلى مبيعاً) */}
+      {!searchQuery && selectedCategory === 'all' && activeFilterTab === 'all' && bestsellers.length > 0 && (
+        <BestsellersShelf
+          products={bestsellers}
+          settings={settings}
+          cartItems={cart}
+          onUpdateCartItem={onUpdateCartItem}
+          onSetCartItemQty={onSetCartItemQty}
+        />
+      )}
 
       {/* 5. Quick Reorder Shelf (if customer has past orders and search is empty) */}
       {!searchQuery && customerPastItems.length > 0 && selectedCategory === 'all' && (

@@ -274,6 +274,27 @@ export const AdminSettings: React.FC<AdminSettingsProps> = ({
               className="w-full bg-slate-50 border border-gray-200 rounded-lg p-2 text-xs text-slate-800 focus:outline-none focus:border-amber-500 focus:bg-white text-right"
             />
           </div>
+
+          {/* Previous Debt on Receipt Toggle */}
+          <div className="pt-2 border-t border-gray-100 flex items-center justify-between gap-3 bg-amber-50/50 p-3 rounded-lg border border-amber-200/60">
+            <div>
+              <span className="font-bold text-xs text-slate-900 block">
+                📑 إظهار قسم المديونية السابقة والإجمالي المستحق في الفاتورة المطبوعة للعميل
+              </span>
+              <span className="text-[11px] text-slate-500 font-normal">
+                عند التفعيل، توضح الفاتورة المطبوعة (المديونية السابقة + الفاتورة الحالية = الإجمالي المستحق والمدفوع والمتبقي)
+              </span>
+            </div>
+            <label className="relative inline-flex items-center cursor-pointer shrink-0">
+              <input
+                type="checkbox"
+                checked={settings.showPreviousDebtOnReceipt ?? true}
+                onChange={(e) => setSettings({ ...settings, showPreviousDebtOnReceipt: e.target.checked })}
+                className="sr-only peer"
+              />
+              <div className="w-9 h-5 bg-slate-300 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-emerald-600"></div>
+            </label>
+          </div>
         </div>
 
         {/* Company Identity & Contact Info */}

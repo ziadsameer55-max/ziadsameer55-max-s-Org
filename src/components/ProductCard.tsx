@@ -26,6 +26,8 @@ export const ProductCard: React.FC<ProductCardProps> = ({
   const isLocked = product.status === 'locked';
   const isPriceActuallyHidden = hidePrice || (product.price === 0 || !product.price);
   const lineTotal = (product.price || 0) * (quantity || 0);
+  const lowThreshold = product.lowStockThreshold || 5;
+  const isLowStock = product.stock <= lowThreshold && product.stock > 0;
 
   if (viewMode === 'grid') {
     return (
@@ -59,9 +61,9 @@ export const ProductCard: React.FC<ProductCardProps> = ({
               <Lock className="w-2.5 h-2.5" />
               مغلق
             </span>
-          ) : product.stock <= 10 && product.stock > 0 ? (
-            <span className="px-2 py-0.5 rounded-md bg-amber-100 text-amber-800 text-[10px] font-bold border border-amber-200">
-              متبقي {product.stock} {product.unit}
+          ) : isLowStock ? (
+            <span className="px-2 py-0.5 rounded-md bg-amber-500 text-slate-950 text-[10px] font-black border border-amber-600 shadow-xs animate-pulse">
+              ⚠️ متبقي {product.stock} {product.unit || 'كرتونة'}
             </span>
           ) : null}
         </div>
@@ -246,6 +248,11 @@ export const ProductCard: React.FC<ProductCardProps> = ({
           {product.minQty > 1 && (
             <span className="text-[10px] bg-slate-100 text-slate-600 px-1 rounded">
               أقل طلب: {product.minQty}
+            </span>
+          )}
+          {isLowStock && (
+            <span className="text-[10px] bg-amber-100 text-amber-900 border border-amber-300 font-bold px-1.5 py-0.2 rounded">
+              ⚠️ متبقي {product.stock} {product.unit || 'كرتونة'}
             </span>
           )}
         </div>

@@ -6,6 +6,7 @@ import {
   Order,
   SystemSettings,
   OrderStatus,
+  DealOffer,
 } from './types';
 import { Header } from './components/Header';
 import { NotebookCatalog, CartItem } from './components/NotebookCatalog';
@@ -18,6 +19,7 @@ import { AdminSidebar } from './components/AdminSidebar';
 import { AdminFastOrders } from './components/AdminFastOrders';
 import { AdminDebtsManager } from './components/AdminDebtsManager';
 import { AdminProductsManager } from './components/AdminProductsManager';
+import { AdminDealsManager } from './components/AdminDealsManager';
 import { AdminSettings } from './components/AdminSettings';
 import { AdminOrderEditModal } from './components/AdminOrderEditModal';
 import { PrintReceiptModal } from './components/PrintReceiptModal';
@@ -60,6 +62,8 @@ export default function App() {
   const [products, setProducts] = useState<Product[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
+  const [deals, setDeals] = useState<DealOffer[]>([]);
+  const [bestsellers, setBestsellers] = useState<Product[]>([]);
   const [activeTab, setActiveTab] = useState<string>('catalog');
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
   const [isMobileAdminSidebarOpen, setIsMobileAdminSidebarOpen] = useState(false);
@@ -215,6 +219,28 @@ export default function App() {
         const oData = await orderRes.json();
         setOrders(oData);
       }
+
+      // 5. Deals & Offers
+      try {
+        const dealsRes = await apiFetch('/api/deals');
+        if (dealsRes.ok) {
+          const dData = await dealsRes.json();
+          setDeals(dData);
+        }
+      } catch (err) {
+        console.error('Failed to load deals:', err);
+      }
+
+      // 6. Bestsellers (الأكثر طلباً)
+      try {
+        const bestsellersRes = await apiFetch('/api/products/bestsellers?limit=8');
+        if (bestsellersRes.ok) {
+          const bData = await bestsellersRes.json();
+          setBestsellers(bData);
+        }
+      } catch (err) {
+        console.error('Failed to load bestsellers:', err);
+      }
     } catch (err) {
       console.error('Failed to load initial data from server:', err);
     }
@@ -323,41 +349,49 @@ export default function App() {
         body: JSON.stringify(newSettings),
       });
       if (res.ok) {
-        setSettings(newSettings);
-        showToast('تم حفظ الإعدادات بنجاح');
+        const data = await res.json().catch(() => null);
+        const updated = data?.settings || newSettings;
+        setSettings(updated);
+        showToast('تم حفظ وتطبيق إعدادات النظام بنجاح 🟢', 'success');
+        // Refresh products and data to reflect any visibility changes immediately
+        fetchData();
+      } else {
+        const errorData = await res.json().catch(() => null);
+        showToast(errorData?.error || 'فشل حفظ الإعدادات، يرجى المحاولة مرة أخرى 🔴', 'error');
       }
     } catch (err) {
-      showToast('فشل حفظ الإعدادات', 'error');
+      console.error('Error saving settings:', err);
+      showToast('فشل الاتصال بالخادم لحفظ الإعدادات 🔴', 'error');
     }
   };
 
   const handleReorder = (ord: Order) => {
-    const reorderItems: CartItem[] = (ord.items || []).map((item) => {
+    const availableItems: CartItem[] = [];
+    const unavailableNames: string[] = [];
+
+    (ord.items || []).forEach((item) => {
       const matched = products.find((p) => p.id === item.productId);
-      if (matched) {
-        return { product: matched, quantity: item.quantity };
+      if (matched && matched.status === 'open' && (matched.stock === undefined || matched.stock > 0)) {
+        // Enforce limits and use live up-to-date product prices
+        const minQ = matched.minQty || 1;
+        const maxQ = matched.maxQty || 9999;
+        const validQty = Math.max(minQ, Math.min(maxQ, item.quantity));
+        availableItems.push({ product: matched, quantity: validQty });
+      } else {
+        unavailableNames.push(item.productName);
       }
-      return {
-        product: {
-          id: item.productId,
-          name: item.productName,
-          category: 'عام',
-          price: item.unitPrice,
-          unit: item.unit || 'كرتونة',
-          image: '',
-          status: 'open',
-          minQty: 1,
-          maxQty: null,
-          stock: 100,
-        },
-        quantity: item.quantity,
-      };
     });
 
-    if (reorderItems.length > 0) {
-      setCart(reorderItems);
+    if (availableItems.length > 0) {
+      setCart(availableItems);
       setIsCartOpen(true);
-      showToast('تم نسخ أصناف الطلب السابق إلى السلة بنجاح', 'success');
+      if (unavailableNames.length > 0) {
+        showToast(`تمت إضافة ${availableItems.length} صنف متاح بالسعر الحالي. تم استبعاد الأصناف غير المتاحة (${unavailableNames.join('، ')})`, 'success');
+      } else {
+        showToast('تمت إضافة جميع أصناف الطلب السابق إلى السلة بالأسعار الحالية 🛒', 'success');
+      }
+    } else {
+      showToast('عفواً، جميع أصناف هذا الطلب غير متاحة للطلب حالياً أو نفدت من المخزن', 'error');
     }
   };
 
@@ -422,6 +456,7 @@ export default function App() {
                       {activeTab === 'admin-orders' && '📋 إدارة طلبات الجملة'}
                       {activeTab === 'admin-debts' && '💰 إدارة التحصيل والمديونيات'}
                       {activeTab === 'admin-products' && '📦 إدارة المنتجات والتسعير'}
+                      {activeTab === 'admin-deals' && '🔥 إدارة العروض والخصومات'}
                       {activeTab === 'admin-settings' && '⚙️ إعدادات النظام والمتجر'}
                     </h1>
                     <span className="text-[10px] text-slate-400 hidden sm:inline-block">
@@ -483,6 +518,10 @@ export default function App() {
                 />
               )}
 
+              {activeTab === 'admin-deals' && (
+                <AdminDealsManager onRefreshData={fetchData} />
+              )}
+
               {activeTab === 'admin-settings' && (
                 <AdminSettings settings={settings} onSaveSettings={handleSaveSettings} />
               )}
@@ -517,6 +556,8 @@ export default function App() {
                   settings={settings}
                   user={user}
                   orders={orders}
+                  deals={deals}
+                  bestsellers={bestsellers}
                   isStoreOpen={isStoreOpen}
                   cart={cart}
                   favorites={favorites}

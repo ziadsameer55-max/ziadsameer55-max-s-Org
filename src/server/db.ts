@@ -176,6 +176,178 @@ export function deleteSession(database: Database, token: string): void {
   saveDb();
 }
 
+export function revokeAllUserSessions(database: Database, userId: string): void {
+  if (!userId) return;
+  database.run(`DELETE FROM sessions WHERE userId = ?`, [userId]);
+  saveDb();
+}
+
+export function logSecurityEvent(
+  database: Database,
+  event: string,
+  userId?: string,
+  username?: string,
+  ip?: string,
+  details?: string
+): void {
+  try {
+    const id = 'sec-' + Date.now() + '-' + crypto.randomBytes(4).toString('hex');
+    const timestamp = new Date().toISOString();
+    database.run(
+      `INSERT INTO audit_logs (id, event, userId, username, ip, details, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [
+        id,
+        event,
+        userId || null,
+        username || null,
+        ip || null,
+        details || null,
+        timestamp,
+      ]
+    );
+    saveDb();
+  } catch (err) {
+    console.error('Failed to write security log:', err);
+  }
+}
+
+export function recordLoginAttempt(
+  database: Database,
+  identifier: string,
+  ip: string,
+  success: boolean
+): void {
+  try {
+    const id = 'att-' + Date.now() + '-' + crypto.randomBytes(4).toString('hex');
+    const now = Date.now();
+    database.run(
+      `INSERT INTO login_attempts (id, identifier, ip, attemptTime, success) VALUES (?, ?, ?, ?, ?)`,
+      [id, identifier.trim().toLowerCase(), ip || '127.0.0.1', now, success ? 1 : 0]
+    );
+
+    // Clean up attempts older than 24 hours
+    database.run(`DELETE FROM login_attempts WHERE attemptTime < ?`, [now - 24 * 60 * 60 * 1000]);
+    saveDb();
+  } catch (err) {
+    console.error('Failed to record login attempt:', err);
+  }
+}
+
+export function checkLoginLockout(
+  database: Database,
+  identifier: string,
+  ip: string
+): { isLocked: boolean; remainingMinutes: number } {
+  try {
+    const now = Date.now();
+    const windowMs = 15 * 60 * 1000; // 15 minutes window
+    const thresholdTime = now - windowMs;
+    const cleanId = identifier.trim().toLowerCase();
+
+    // Check failed attempts in the last 15 minutes for this identifier or IP
+    const stmt = database.prepare(`
+      SELECT COUNT(*) as failedCount, MAX(attemptTime) as lastAttempt
+      FROM login_attempts
+      WHERE (identifier = ? OR ip = ?) AND success = 0 AND attemptTime >= ?
+    `);
+    stmt.bind([cleanId, ip || '127.0.0.1', thresholdTime]);
+
+    if (stmt.step()) {
+      const row = stmt.getAsObject();
+      stmt.free();
+      const failedCount = Number(row.failedCount) || 0;
+      const lastAttempt = Number(row.lastAttempt) || 0;
+
+      if (failedCount >= 5) {
+        const lockoutEnd = lastAttempt + windowMs;
+        if (now < lockoutEnd) {
+          const remainingMinutes = Math.ceil((lockoutEnd - now) / 60000);
+          return { isLocked: true, remainingMinutes: Math.max(1, remainingMinutes) };
+        }
+      }
+    } else {
+      stmt.free();
+    }
+  } catch (err) {
+    console.error('Error checking login lockout:', err);
+  }
+  return { isLocked: false, remainingMinutes: 0 };
+}
+
+export function clearLoginAttempts(database: Database, identifier: string, ip: string): void {
+  try {
+    const cleanId = identifier.trim().toLowerCase();
+    database.run(
+      `DELETE FROM login_attempts WHERE identifier = ? OR ip = ?`,
+      [cleanId, ip || '127.0.0.1']
+    );
+    saveDb();
+  } catch (err) {
+    console.error('Failed to clear login attempts:', err);
+  }
+}
+
+export function createPasswordResetToken(database: Database, userId: string, phone: string): string {
+  const token = crypto.randomBytes(24).toString('hex');
+  const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+  const now = Date.now();
+  const expiresAt = now + 15 * 60 * 1000; // 15 minutes validity
+  const id = 'pr-' + Date.now() + '-' + crypto.randomBytes(4).toString('hex');
+
+  // Invalidate any previous unused reset tokens for this user
+  database.run(`DELETE FROM password_resets WHERE userId = ? OR phone = ?`, [userId, phone]);
+
+  database.run(
+    `INSERT INTO password_resets (id, userId, phone, tokenHash, expiresAt, usedAt, createdAt) VALUES (?, ?, ?, ?, ?, NULL, ?)`,
+    [id, userId, phone, tokenHash, expiresAt, new Date().toISOString()]
+  );
+  saveDb();
+
+  return token;
+}
+
+export function verifyAndConsumePasswordResetToken(
+  database: Database,
+  phone: string,
+  token: string
+): { valid: boolean; userId?: string } {
+  try {
+    const tokenHash = crypto.createHash('sha256').update(token.trim()).digest('hex');
+    const now = Date.now();
+
+    const stmt = database.prepare(
+      `SELECT id, userId, expiresAt, usedAt FROM password_resets WHERE phone = ? AND tokenHash = ?`
+    );
+    stmt.bind([phone.trim(), tokenHash]);
+
+    if (stmt.step()) {
+      const row = stmt.getAsObject();
+      stmt.free();
+
+      const expiresAt = Number(row.expiresAt);
+      const usedAt = row.usedAt;
+
+      if (usedAt) {
+        return { valid: false };
+      }
+
+      if (expiresAt < now) {
+        return { valid: false };
+      }
+
+      // Mark token as used
+      database.run(`UPDATE password_resets SET usedAt = ? WHERE id = ?`, [now, String(row.id)]);
+      saveDb();
+
+      return { valid: true, userId: String(row.userId) };
+    }
+    stmt.free();
+  } catch (err) {
+    console.error('Error verifying reset token:', err);
+  }
+  return { valid: false };
+}
+
 export function cleanupExpiredSessions(database: Database): void {
   const now = Date.now();
   database.run(`DELETE FROM sessions WHERE expiresAt < ?`, [now]);
@@ -301,7 +473,62 @@ function initSchema(database: Database): void {
       createdAt INTEGER NOT NULL,
       expiresAt INTEGER NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS deals (
+      id TEXT PRIMARY KEY,
+      productId TEXT NOT NULL,
+      productName TEXT NOT NULL,
+      productImage TEXT,
+      productBrand TEXT,
+      productSize TEXT,
+      productUnit TEXT,
+      category TEXT,
+      offerType TEXT NOT NULL,
+      badgeText TEXT NOT NULL,
+      offerPrice REAL NOT NULL,
+      originalPrice REAL NOT NULL,
+      discountPercentage REAL,
+      startDate TEXT NOT NULL,
+      endDate TEXT,
+      description TEXT,
+      isActive INTEGER DEFAULT 1,
+      targetType TEXT DEFAULT 'all',
+      targetId TEXT,
+      createdAt TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS audit_logs (
+      id TEXT PRIMARY KEY,
+      event TEXT NOT NULL,
+      userId TEXT,
+      username TEXT,
+      ip TEXT,
+      details TEXT,
+      timestamp TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS login_attempts (
+      id TEXT PRIMARY KEY,
+      identifier TEXT NOT NULL,
+      ip TEXT NOT NULL,
+      attemptTime INTEGER NOT NULL,
+      success INTEGER NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS password_resets (
+      id TEXT PRIMARY KEY,
+      userId TEXT NOT NULL,
+      phone TEXT NOT NULL,
+      tokenHash TEXT NOT NULL,
+      expiresAt INTEGER NOT NULL,
+      usedAt INTEGER,
+      createdAt TEXT NOT NULL
+    );
   `);
+
+  // Safe migration check for existing users table columns
+  try {
+    database.run(`ALTER TABLE users ADD COLUMN createdAt TEXT`);
+  } catch {}
 
   // Safe migration check for existing orders table columns
   try {
@@ -314,8 +541,16 @@ function initSchema(database: Database): void {
     database.run(`ALTER TABLE orders ADD COLUMN paymentStatus TEXT DEFAULT 'Unpaid'`);
   } catch {}
 
+  // Safe migration check for products lowStockThreshold
+  try {
+    database.run(`ALTER TABLE products ADD COLUMN lowStockThreshold INTEGER DEFAULT 5`);
+  } catch {}
+
   // Sync and secure Admin account
   syncAdminUserAccount(database);
+
+  // Seed default deals if table exists and empty
+  seedInitialDealsIfEmpty(database);
 
   // Update existing stored settings if address is still default Tanta
   try {
@@ -517,4 +752,115 @@ function seedInitialData(database: Database): void {
     `INSERT OR IGNORE INTO settings (key, value) VALUES ('system_config', ?)`,
     [JSON.stringify(settings)]
   );
+}
+
+export function seedInitialDealsIfEmpty(database: Database): void {
+  try {
+    const res = database.exec(`SELECT COUNT(*) as count FROM deals`);
+    const count = (res[0]?.values[0]?.[0] as number) || 0;
+    if (count === 0) {
+      // Find real product IDs to link deals to
+      const pStmt = database.prepare(`SELECT id, name, category, price, unit, image FROM products LIMIT 10`);
+      const sampleProds: any[] = [];
+      while (pStmt.step()) {
+        sampleProds.push(pStmt.getAsObject());
+      }
+      pStmt.free();
+
+      if (sampleProds.length > 0) {
+        const dealStmt = database.prepare(`
+          INSERT INTO deals (id, productId, productName, productImage, productBrand, productSize, productUnit, category, offerType, badgeText, offerPrice, originalPrice, discountPercentage, startDate, endDate, description, isActive, targetType, targetId, createdAt)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `);
+
+        // Deal 1: Special Price on Pepsi / first product
+        const p1 = sampleProds[0];
+        const p1Orig = Number(p1.price) || 280;
+        const p1Offer = Math.round(p1Orig * 0.9);
+        dealStmt.run([
+          'deal-halim-1',
+          p1.id,
+          p1.name,
+          p1.image || '',
+          'بيبسي كولا',
+          '300 مل',
+          p1.unit || 'كرتونة',
+          p1.category || 'المشروبات الغازية والمياه',
+          'discount',
+          '🔥 خصم 10%',
+          p1Offer,
+          p1Orig,
+          10,
+          new Date().toISOString().split('T')[0],
+          new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+          'عرض خاص ومميز على كرتونة الجملة لفترة محدودة لعملاء الإسكندرية',
+          1,
+          'all',
+          null,
+          new Date().toISOString(),
+        ]);
+
+        if (sampleProds.length > 1) {
+          const p2 = sampleProds[1];
+          const p2Orig = Number(p2.price) || 240;
+          const p2Offer = Math.round(p2Orig * 0.88);
+          dealStmt.run([
+            'deal-halim-2',
+            p2.id,
+            p2.name,
+            p2.image || '',
+            'شيبسي',
+            'عائلي',
+            p2.unit || 'كرتونة',
+            p2.category || 'الشيبسي والسناكس',
+            'special_price',
+            '🎁 سعر خاص',
+            p2Offer,
+            p2Orig,
+            12,
+            new Date().toISOString().split('T')[0],
+            new Date(Date.now() + 5 * 24 * 60 * 60 * 1000).toISOString(),
+            'سعر كرتونة خاص جداً للسوبر ماركت والمحلات التجارية',
+            1,
+            'all',
+            null,
+            new Date().toISOString(),
+          ]);
+        }
+
+        if (sampleProds.length > 2) {
+          const p3 = sampleProds[2];
+          const p3Orig = Number(p3.price) || 190;
+          const p3Offer = Math.round(p3Orig * 0.85);
+          dealStmt.run([
+            'deal-halim-3',
+            p3.id,
+            p3.name,
+            p3.image || '',
+            'أكوافينا',
+            '1.5 لتر',
+            p3.unit || 'كرتونة',
+            p3.category || 'المشروبات الغازية والمياه',
+            'limited_time',
+            '⏰ لفترة محدودة',
+            p3Offer,
+            p3Orig,
+            15,
+            new Date().toISOString().split('T')[0],
+            new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString(),
+            'عرض ينتهي قريباً - أفضل سعر بالتة مياه نقية في السوق',
+            1,
+            'all',
+            null,
+            new Date().toISOString(),
+          ]);
+        }
+
+        dealStmt.free();
+        saveDb();
+      }
+    }
+  } catch (err) {
+    console.error('Error seeding initial deals:', err);
+  }
 }
