@@ -2,6 +2,7 @@ import initSqlJs, { Database } from 'sql.js';
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
+import * as argon2 from 'argon2';
 import { Product, Category, Order, OrderItem, SystemSettings, User, OrderLog, SystemNotification } from '../types.js';
 import { INITIAL_CATEGORIES, INITIAL_PRODUCTS } from './catalogData.js';
 
@@ -10,32 +11,97 @@ const DB_FILE = path.resolve(DB_DIR, 'halim.sqlite');
 
 let db: Database | null = null;
 
-// Secure Password Hashing Utilities using Node.js crypto scrypt
-export function hashPassword(password: string): string {
-  const salt = crypto.randomBytes(16).toString('hex');
-  const hash = crypto.scryptSync(password, salt, 64).toString('hex');
-  return `scrypt:${salt}:${hash}`;
+// Secure Password Hashing Utilities using Argon2id
+export async function hashPassword(password: string): Promise<string> {
+  return await argon2.hash(password, {
+    type: argon2.argon2id,
+    memoryCost: 65536, // 64 MB memory
+    timeCost: 3,       // 3 iterations
+    parallelism: 4,    // 4 threads
+  });
 }
 
-export function verifyPassword(password: string, storedHash: string): boolean {
+export async function verifyPassword(password: string, storedHash: string): Promise<boolean> {
   if (!storedHash) return false;
-  if (!storedHash.startsWith('scrypt:')) {
-    // Backward compatibility for existing plaintext customer demo passwords
-    return password === storedHash;
+
+  // 1. Argon2id / Argon2 hash verification
+  if (storedHash.startsWith('$argon2')) {
+    try {
+      return await argon2.verify(storedHash, password);
+    } catch {
+      return false;
+    }
   }
-  const parts = storedHash.split(':');
-  if (parts.length !== 3) return false;
-  const salt = parts[1];
-  const originalHash = parts[2];
-  const hash = crypto.scryptSync(password, salt, 64).toString('hex');
-  return crypto.timingSafeEqual(Buffer.from(hash, 'hex'), Buffer.from(originalHash, 'hex'));
+
+  // 2. Scrypt and PBKDF2 backward compatibility
+  if (storedHash.startsWith('scrypt:') || storedHash.startsWith('pbkdf2:')) {
+    const parts = storedHash.split(':');
+    if (parts.length !== 3) return false;
+    const scheme = parts[0];
+    const salt = parts[1];
+    const originalHash = parts[2];
+    
+    if (scheme === 'scrypt') {
+      const hash = crypto.scryptSync(password, salt, 64).toString('hex');
+      return crypto.timingSafeEqual(Buffer.from(hash, 'hex'), Buffer.from(originalHash, 'hex'));
+    } else if (scheme === 'pbkdf2') {
+      const hash = crypto.pbkdf2Sync(password, salt, 10000, 64, 'sha256').toString('hex');
+      return crypto.timingSafeEqual(Buffer.from(hash, 'hex'), Buffer.from(originalHash, 'hex'));
+    }
+  }
+
+  // 3. Plaintext legacy fallback
+  return password === storedHash;
+}
+
+// Strict Strong Password Validation Policy
+// Minimum 12 characters, requiring uppercase, lowercase, numbers, and special symbols
+export function validateStrongPassword(password: string): { valid: boolean; message?: string } {
+  if (!password || typeof password !== 'string') {
+    return { valid: false, message: 'يرجى إدخال كلمة مرور صحيحة' };
+  }
+  if (password.length < 12) {
+    return { valid: false, message: 'كلمة المرور يجب ألا تقل عن 12 رمزاً/خانة لضمان أقصى حماية' };
+  }
+
+  const hasLower = /[a-z]/.test(password);
+  const hasUpper = /[A-Z]/.test(password);
+  const hasNumber = /[0-9]/.test(password);
+  const hasSpecial = /[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?~` ]/.test(password);
+
+  if (!hasLower) {
+    return { valid: false, message: 'كلمة المرور يجب أن تتضمن حرفاً صغيراً واحداً على الأقل (a-z)' };
+  }
+
+  if (!hasUpper) {
+    return { valid: false, message: 'كلمة المرور يجب أن تتضمن حرفاً كبيراً واحداً على الأقل (A-Z)' };
+  }
+
+  if (!hasNumber) {
+    return { valid: false, message: 'كلمة المرور يجب أن تتضمن رقماً واحداً على الأقل (0-9)' };
+  }
+
+  if (!hasSpecial) {
+    return { valid: false, message: 'كلمة المرور يجب أن تتضمن رمزاً خاصاً واحداً على الأقل (!@#$%^&*...)' };
+  }
+
+  const commonWeak = [
+    '123456789012', 'password12345', 'admin12345678', 'qwerty123456',
+    'halim12345678', '112233445566', '000000000000', '123412341234',
+    'admin@1234567', 'user12345678', 'welcome123456', 'Pass@word1234'
+  ];
+  if (commonWeak.includes(password.toLowerCase())) {
+    return { valid: false, message: 'كلمة المرور ضعيفة وشائعة، يرجى اختيار كلمة مرور أكثر تعقيداً' };
+  }
+
+  return { valid: true };
 }
 
 // Master Admin configuration (stored hashed in Database)
-export const NEW_ADMIN_CREDENTIALS = {
+const INITIAL_ADMIN_CONFIG = {
   id: 'usr-admin-master',
-  username: 'MohamedFawzy',
-  passwordPlain: 'Mf!7Qz#29vL@8Kx$4Np',
+  username: 'mohamed.fawzy',
+  passwordPlain: process.env.ADMIN_INITIAL_PASSWORD || 'Hamo2026##@2026',
   fullName: 'محمد فوزي / الإدارة العامة',
   phone: '01000000000',
   role: 'admin',
@@ -56,7 +122,7 @@ export async function getDb(): Promise<Database> {
     try {
       const fileBuffer = fs.readFileSync(DB_FILE);
       db = new SQL.Database(fileBuffer);
-      initSchema(db);
+      await initSchema(db);
 
       // Ensure categories and products are populated with official Halim catalog
       const res = db.exec('SELECT COUNT(*) as count FROM products');
@@ -64,18 +130,19 @@ export async function getDb(): Promise<Database> {
       if (count < 20) {
         seedCategoriesAndProducts(db);
       }
+      await syncAdminUserAccount(db);
       saveDb();
     } catch (err) {
       console.error('Database file corrupted or malformed, initializing fresh clean database:', err);
       db = new SQL.Database();
-      initSchema(db);
-      seedInitialData(db);
+      await initSchema(db);
+      await seedInitialData(db);
       saveDb();
     }
   } else {
     db = new SQL.Database();
-    initSchema(db);
-    seedInitialData(db);
+    await initSchema(db);
+    await seedInitialData(db);
     saveDb();
   }
 
@@ -138,7 +205,10 @@ export function getSessionUser(database: Database, token: string): User | null {
 
   const now = Date.now();
   const stmt = database.prepare(
-    `SELECT userId, username, role, fullName, phone, storeName, address, expiresAt FROM sessions WHERE token = ?`
+    `SELECT s.userId, s.username, s.role, s.fullName, s.phone, s.storeName, s.address, s.expiresAt, u.status 
+     FROM sessions s 
+     LEFT JOIN users u ON s.userId = u.id 
+     WHERE s.token = ?`
   );
   stmt.bind([token.trim()]);
 
@@ -154,6 +224,13 @@ export function getSessionUser(database: Database, token: string): User | null {
       return null;
     }
 
+    if (row.status === 'disabled') {
+      // Disabled user -> revoke session
+      database.run(`DELETE FROM sessions WHERE token = ?`, [token.trim()]);
+      saveDb();
+      return null;
+    }
+
     return {
       id: String(row.userId),
       username: String(row.username),
@@ -162,6 +239,7 @@ export function getSessionUser(database: Database, token: string): User | null {
       phone: String(row.phone),
       storeName: row.storeName ? String(row.storeName) : undefined,
       address: row.address ? String(row.address) : undefined,
+      status: (row.status as any) || 'active',
       token: token.trim(),
     };
   }
@@ -242,23 +320,51 @@ export function checkLoginLockout(
     const now = Date.now();
     const windowMs = 15 * 60 * 1000; // 15 minutes window
     const thresholdTime = now - windowMs;
-    const cleanId = identifier.trim().toLowerCase();
+    const cleanId = identifier ? identifier.trim().toLowerCase() : '';
+    const cleanIp = ip || '127.0.0.1';
 
-    // Check failed attempts in the last 15 minutes for this identifier or IP
-    const stmt = database.prepare(`
+    // 1. Account-specific lockout: 5 failed attempts on the same phone/username locks that account
+    if (cleanId) {
+      const stmt = database.prepare(`
+        SELECT COUNT(*) as failedCount, MAX(attemptTime) as lastAttempt
+        FROM login_attempts
+        WHERE identifier = ? AND success = 0 AND attemptTime >= ?
+      `);
+      stmt.bind([cleanId, thresholdTime]);
+
+      if (stmt.step()) {
+        const row = stmt.getAsObject();
+        stmt.free();
+        const failedCount = Number(row.failedCount) || 0;
+        const lastAttempt = Number(row.lastAttempt) || 0;
+
+        if (failedCount >= 5) {
+          const lockoutEnd = lastAttempt + windowMs;
+          if (now < lockoutEnd) {
+            const remainingMinutes = Math.ceil((lockoutEnd - now) / 60000);
+            return { isLocked: true, remainingMinutes: Math.max(1, remainingMinutes) };
+          }
+        }
+      } else {
+        stmt.free();
+      }
+    }
+
+    // 2. IP-wide brute force lockout: 25 failed attempts across multiple accounts from the same IP
+    const ipStmt = database.prepare(`
       SELECT COUNT(*) as failedCount, MAX(attemptTime) as lastAttempt
       FROM login_attempts
-      WHERE (identifier = ? OR ip = ?) AND success = 0 AND attemptTime >= ?
+      WHERE ip = ? AND success = 0 AND attemptTime >= ?
     `);
-    stmt.bind([cleanId, ip || '127.0.0.1', thresholdTime]);
+    ipStmt.bind([cleanIp, thresholdTime]);
 
-    if (stmt.step()) {
-      const row = stmt.getAsObject();
-      stmt.free();
+    if (ipStmt.step()) {
+      const row = ipStmt.getAsObject();
+      ipStmt.free();
       const failedCount = Number(row.failedCount) || 0;
       const lastAttempt = Number(row.lastAttempt) || 0;
 
-      if (failedCount >= 5) {
+      if (failedCount >= 25) {
         const lockoutEnd = lastAttempt + windowMs;
         if (now < lockoutEnd) {
           const remainingMinutes = Math.ceil((lockoutEnd - now) / 60000);
@@ -266,7 +372,7 @@ export function checkLoginLockout(
         }
       }
     } else {
-      stmt.free();
+      ipStmt.free();
     }
   } catch (err) {
     console.error('Error checking login lockout:', err);
@@ -348,12 +454,12 @@ export function verifyAndConsumePasswordResetToken(
   return { valid: false };
 }
 
-export function cleanupExpiredSessions(database: Database): void {
+export async function cleanupExpiredSessions(database: Database): Promise<void> {
   const now = Date.now();
   database.run(`DELETE FROM sessions WHERE expiresAt < ?`, [now]);
 }
 
-function initSchema(database: Database): void {
+export async function initSchema(database: Database): Promise<void> {
   database.run(`
     CREATE TABLE IF NOT EXISTS users (
       id TEXT PRIMARY KEY,
@@ -529,6 +635,9 @@ function initSchema(database: Database): void {
   try {
     database.run(`ALTER TABLE users ADD COLUMN createdAt TEXT`);
   } catch {}
+  try {
+    database.run(`ALTER TABLE users ADD COLUMN status TEXT DEFAULT 'active'`);
+  } catch {}
 
   // Safe migration check for existing orders table columns
   try {
@@ -547,10 +656,7 @@ function initSchema(database: Database): void {
   } catch {}
 
   // Sync and secure Admin account
-  syncAdminUserAccount(database);
-
-  // Seed default deals if table exists and empty
-  seedInitialDealsIfEmpty(database);
+  await syncAdminUserAccount(database);
 
   // Update existing stored settings if address is still default Tanta
   try {
@@ -568,19 +674,19 @@ function initSchema(database: Database): void {
   }
 }
 
-export function syncAdminUserAccount(database: Database): void {
+export async function syncAdminUserAccount(database: Database): Promise<void> {
   try {
     // 1. Permanently remove old legacy admin users and previous admin credentials
-    database.run(`DELETE FROM users WHERE username IN ('admin', 'halim_admin', 'usr-admin') OR (role = 'admin' AND username != 'MohamedFawzy');`);
+    database.run(`DELETE FROM users WHERE username IN ('admin', 'halim_admin', 'usr-admin', 'MohamedFawzy') OR (role = 'admin' AND username != 'mohamed.fawzy');`);
 
-    // Invalidate old sessions for non-MohamedFawzy admins
-    database.run(`DELETE FROM sessions WHERE role = 'admin' AND username != 'MohamedFawzy';`);
+    // Invalidate old sessions for non-mohamed.fawzy admins
+    database.run(`DELETE FROM sessions WHERE role = 'admin' AND username != 'mohamed.fawzy';`);
 
-    // 2. Insert or replace the master secure admin with cryptographically hashed password
-    const hashedAdminPassword = hashPassword(NEW_ADMIN_CREDENTIALS.passwordPlain);
+    // 2. Insert or replace the master secure admin with cryptographically hashed password (Argon2id)
+    const hashedAdminPassword = await hashPassword(INITIAL_ADMIN_CONFIG.passwordPlain);
 
     const stmt = database.prepare(`SELECT id FROM users WHERE id = ? OR username = ?`);
-    stmt.bind([NEW_ADMIN_CREDENTIALS.id, NEW_ADMIN_CREDENTIALS.username]);
+    stmt.bind([INITIAL_ADMIN_CONFIG.id, INITIAL_ADMIN_CONFIG.username]);
     const exists = stmt.step();
     stmt.free();
 
@@ -588,48 +694,32 @@ export function syncAdminUserAccount(database: Database): void {
       database.run(
         `UPDATE users SET username = ?, password = ?, fullName = ?, phone = ?, role = ?, storeName = ?, address = ? WHERE id = ? OR username = ?`,
         [
-          NEW_ADMIN_CREDENTIALS.username,
+          INITIAL_ADMIN_CONFIG.username,
           hashedAdminPassword,
-          NEW_ADMIN_CREDENTIALS.fullName,
-          NEW_ADMIN_CREDENTIALS.phone,
-          NEW_ADMIN_CREDENTIALS.role,
-          NEW_ADMIN_CREDENTIALS.storeName,
-          NEW_ADMIN_CREDENTIALS.address,
-          NEW_ADMIN_CREDENTIALS.id,
-          NEW_ADMIN_CREDENTIALS.username,
+          INITIAL_ADMIN_CONFIG.fullName,
+          INITIAL_ADMIN_CONFIG.phone,
+          INITIAL_ADMIN_CONFIG.role,
+          INITIAL_ADMIN_CONFIG.storeName,
+          INITIAL_ADMIN_CONFIG.address,
+          INITIAL_ADMIN_CONFIG.id,
+          INITIAL_ADMIN_CONFIG.username,
         ]
       );
     } else {
       database.run(
         `INSERT INTO users (id, username, password, fullName, phone, role, storeName, address) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
         [
-          NEW_ADMIN_CREDENTIALS.id,
-          NEW_ADMIN_CREDENTIALS.username,
+          INITIAL_ADMIN_CONFIG.id,
+          INITIAL_ADMIN_CONFIG.username,
           hashedAdminPassword,
-          NEW_ADMIN_CREDENTIALS.fullName,
-          NEW_ADMIN_CREDENTIALS.phone,
-          NEW_ADMIN_CREDENTIALS.role,
-          NEW_ADMIN_CREDENTIALS.storeName,
-          NEW_ADMIN_CREDENTIALS.address,
+          INITIAL_ADMIN_CONFIG.fullName,
+          INITIAL_ADMIN_CONFIG.phone,
+          INITIAL_ADMIN_CONFIG.role,
+          INITIAL_ADMIN_CONFIG.storeName,
+          INITIAL_ADMIN_CONFIG.address,
         ]
       );
     }
-    // 3. Ensure master session exists for Admin
-    database.run(
-      `INSERT OR REPLACE INTO sessions (token, userId, username, role, fullName, phone, storeName, address, createdAt, expiresAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        'halim_admin_master_token',
-        NEW_ADMIN_CREDENTIALS.id,
-        NEW_ADMIN_CREDENTIALS.username,
-        'admin',
-        NEW_ADMIN_CREDENTIALS.fullName,
-        NEW_ADMIN_CREDENTIALS.phone,
-        NEW_ADMIN_CREDENTIALS.storeName,
-        NEW_ADMIN_CREDENTIALS.address,
-        Date.now(),
-        Date.now() + 365 * 24 * 60 * 60 * 1000,
-      ]
-    );
   } catch (err) {
     console.error('Error syncing admin user:', err);
   }
@@ -670,54 +760,14 @@ export function seedCategoriesAndProducts(database: Database): void {
   prodStmt.free();
 }
 
-function seedInitialData(database: Database): void {
-  // 1. Seed Master Admin (Hashed & Secured)
-  syncAdminUserAccount(database);
+async function seedInitialData(database: Database): Promise<void> {
+  // 1. Seed Master Admin (Hashed & Secured with Argon2id)
+  await syncAdminUserAccount(database);
 
-  // 2. Seed Verified Customers
-  database.run(`
-    INSERT OR IGNORE INTO users (id, username, password, fullName, phone, role, storeName, address) VALUES
-    ('usr-cust-1', '01011112222', '123456', 'محمد أحمد - سوبر ماركت الأمل', '01011112222', 'customer', 'سوبر ماركت الأمل', 'الإسكندرية - بجوار مسجد القويري بوابة 8'),
-    ('usr-cust-2', '01222223333', '123456', 'أحمد محمود - ماركت البركة', '01222223333', 'customer', 'ماركت البركة', 'المحلة الكبرى - شارع البحر'),
-    ('usr-cust-3', '01555556666', '123456', 'سامح علي - ميني ماركت الحمد', '01555556666', 'customer', 'ميني ماركت الحمد', 'زفتى - شارع الجلاء');
-  `);
-
-  // 2. Seed Categories and Products
+  // 2. Seed Official Categories and Products
   seedCategoriesAndProducts(database);
 
-  // 3. Seed Initial Orders with Paid/Remaining tracking
-  database.run(`
-    INSERT OR IGNORE INTO orders (id, orderNumber, customerId, customerName, customerPhone, customerAddress, salesRep, status, createdAt, updatedAt, itemsCount, totalQuantity, subtotal, discount, grandTotal, paidAmount, remainingBalance, paymentStatus, notes, adminNotes) VALUES
-    ('ord-10254', '#10254', 'usr-cust-1', 'محمد أحمد - سوبر ماركت الأمل', '01011112222', 'الإسكندرية - بجوار مسجد القويري بوابة 8', 'محمد فوزي', 'Delivered', '2026-08-11 10:35 PM', '2026-08-11 10:40 PM', 2, 15, 1250, 0, 1250, 1250, 0, 'Paid', 'يرجى التسليم قبل الساعة 4 عصراً', 'تم التأكيد وتسليم الطلب واستلام المبلغ كاملاً'),
-    ('ord-10255', '#10255', 'usr-cust-2', 'أحمد محمود - ماركت البركة', '01222223333', 'المحلة الكبرى - شارع البحر', 'محمد فوزي', 'Delivered', '2026-08-11 02:15 PM', '2026-08-11 02:15 PM', 3, 20, 2150, 50, 2100, 600, 1500, 'Partial', 'طلب عاجل للمحل', 'دفع 600 جنيه عند التسليم ومتبقي 1,500 جنيه'),
-    ('ord-10256', '#10256', 'usr-cust-3', 'سامح علي - ميني ماركت الحمد', '01555556666', 'زفتى - شارع الجلاء', 'محمد فوزي', 'Delivered', '2026-08-12 11:00 AM', '2026-08-12 11:30 AM', 1, 10, 1800, 0, 1800, 0, 1800, 'Unpaid', 'تسليم مع الحساب الأسبوعي', 'فاتورة آجلة بالكامل');
-  `);
-
-  database.run(`
-    INSERT OR IGNORE INTO order_items (id, orderId, productId, productName, unitPrice, quantity, unit, discount, totalPrice) VALUES
-    ('item-1', 'ord-10254', 'prod-halim-21', 'أكوافينا 1.5 لتر', 9, 10, 'زجاجة', 0, 90),
-    ('item-2', 'ord-10254', 'prod-halim-1', 'بيبسي كانز', 10, 24, 'علبة', 0, 240),
-    ('item-3', 'ord-10255', 'prod-halim-14', 'كوكاكولا', 10, 24, 'علبة', 0, 240),
-    ('item-4', 'ord-10255', 'prod-halim-24', 'شيبسي', 10, 50, 'كيس', 0, 500),
-    ('item-5', 'ord-10255', 'prod-halim-20', 'أكوافينا 600 مل', 6, 30, 'زجاجة', 0, 180),
-    ('item-6', 'ord-10256', 'prod-halim-50', 'زيت 1 لتر', 65, 20, 'زجاجة', 0, 1300);
-  `);
-
-  // Seed Payments
-  database.run(`
-    INSERT OR IGNORE INTO payments (id, orderId, orderNumber, customerId, customerName, customerPhone, amount, paymentDate, paymentMethod, collectedBy, notes, createdAt) VALUES
-    ('pay-1', 'ord-10254', '#10254', 'usr-cust-1', 'محمد أحمد - سوبر ماركت الأمل', '01011112222', 1250, '2026-08-11 11:00 PM', 'Cash', 'محمد فوزي', 'سداد كامل قيمة الفاتورة نقداً وقت التسليم', '2026-08-11 11:00 PM'),
-    ('pay-2', 'ord-10255', '#10255', 'usr-cust-2', 'أحمد محمود - ماركت البركة', '01222223333', 600, '2026-08-11 03:00 PM', 'Cash', 'محمد فوزي', 'دفعة نقدية عند التسليم ومتبقي 1,500 ج', '2026-08-11 03:00 PM');
-  `);
-
-  // 5. Seed Notifications
-  database.run(`
-    INSERT OR IGNORE INTO notifications (id, title, message, type, read, createdAt, orderId) VALUES
-    ('notif-1', 'طلب جديد #10255', 'وصل طلب جديد من العميل أحمد محمود بقيمة 2,100 جنيه', 'order', 0, '2026-08-11 02:15 PM', 'ord-10255'),
-    ('notif-2', 'تحصيل دفعة #10255', 'تم تحصيل 600 جنيه من أحمد محمود بواسطة محمد فوزي', 'system', 0, '2026-08-11 03:00 PM', 'ord-10255');
-  `);
-
-  // 6. Seed System Settings
+  // 3. Seed Official System Settings
   const settings: SystemSettings = {
     companyName: 'شركة الحليم للتجارة والتوزيع',
     managerName: 'إدارة الحاج فوزي عبد الحليم',
@@ -752,115 +802,4 @@ function seedInitialData(database: Database): void {
     `INSERT OR IGNORE INTO settings (key, value) VALUES ('system_config', ?)`,
     [JSON.stringify(settings)]
   );
-}
-
-export function seedInitialDealsIfEmpty(database: Database): void {
-  try {
-    const res = database.exec(`SELECT COUNT(*) as count FROM deals`);
-    const count = (res[0]?.values[0]?.[0] as number) || 0;
-    if (count === 0) {
-      // Find real product IDs to link deals to
-      const pStmt = database.prepare(`SELECT id, name, category, price, unit, image FROM products LIMIT 10`);
-      const sampleProds: any[] = [];
-      while (pStmt.step()) {
-        sampleProds.push(pStmt.getAsObject());
-      }
-      pStmt.free();
-
-      if (sampleProds.length > 0) {
-        const dealStmt = database.prepare(`
-          INSERT INTO deals (id, productId, productName, productImage, productBrand, productSize, productUnit, category, offerType, badgeText, offerPrice, originalPrice, discountPercentage, startDate, endDate, description, isActive, targetType, targetId, createdAt)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `);
-
-        // Deal 1: Special Price on Pepsi / first product
-        const p1 = sampleProds[0];
-        const p1Orig = Number(p1.price) || 280;
-        const p1Offer = Math.round(p1Orig * 0.9);
-        dealStmt.run([
-          'deal-halim-1',
-          p1.id,
-          p1.name,
-          p1.image || '',
-          'بيبسي كولا',
-          '300 مل',
-          p1.unit || 'كرتونة',
-          p1.category || 'المشروبات الغازية والمياه',
-          'discount',
-          '🔥 خصم 10%',
-          p1Offer,
-          p1Orig,
-          10,
-          new Date().toISOString().split('T')[0],
-          new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
-          'عرض خاص ومميز على كرتونة الجملة لفترة محدودة لعملاء الإسكندرية',
-          1,
-          'all',
-          null,
-          new Date().toISOString(),
-        ]);
-
-        if (sampleProds.length > 1) {
-          const p2 = sampleProds[1];
-          const p2Orig = Number(p2.price) || 240;
-          const p2Offer = Math.round(p2Orig * 0.88);
-          dealStmt.run([
-            'deal-halim-2',
-            p2.id,
-            p2.name,
-            p2.image || '',
-            'شيبسي',
-            'عائلي',
-            p2.unit || 'كرتونة',
-            p2.category || 'الشيبسي والسناكس',
-            'special_price',
-            '🎁 سعر خاص',
-            p2Offer,
-            p2Orig,
-            12,
-            new Date().toISOString().split('T')[0],
-            new Date(Date.now() + 5 * 24 * 60 * 60 * 1000).toISOString(),
-            'سعر كرتونة خاص جداً للسوبر ماركت والمحلات التجارية',
-            1,
-            'all',
-            null,
-            new Date().toISOString(),
-          ]);
-        }
-
-        if (sampleProds.length > 2) {
-          const p3 = sampleProds[2];
-          const p3Orig = Number(p3.price) || 190;
-          const p3Offer = Math.round(p3Orig * 0.85);
-          dealStmt.run([
-            'deal-halim-3',
-            p3.id,
-            p3.name,
-            p3.image || '',
-            'أكوافينا',
-            '1.5 لتر',
-            p3.unit || 'كرتونة',
-            p3.category || 'المشروبات الغازية والمياه',
-            'limited_time',
-            '⏰ لفترة محدودة',
-            p3Offer,
-            p3Orig,
-            15,
-            new Date().toISOString().split('T')[0],
-            new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString(),
-            'عرض ينتهي قريباً - أفضل سعر بالتة مياه نقية في السوق',
-            1,
-            'all',
-            null,
-            new Date().toISOString(),
-          ]);
-        }
-
-        dealStmt.free();
-        saveDb();
-      }
-    }
-  } catch (err) {
-    console.error('Error seeding initial deals:', err);
-  }
 }

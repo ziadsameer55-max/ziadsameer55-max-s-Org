@@ -73,16 +73,16 @@ const CATEGORY_EMOJIS: Record<string, string> = {
 };
 
 export const NotebookCatalog: React.FC<NotebookCatalogProps> = ({
-  products,
-  categories,
+  products = [],
+  categories = [],
   settings,
   user,
   orders = [],
   deals = [],
   bestsellers = [],
   isStoreOpen,
-  cart,
-  favorites,
+  cart = [],
+  favorites = [],
   selectedCategory,
   onSelectCategory,
   onToggleFavorite,
@@ -112,35 +112,41 @@ export const NotebookCatalog: React.FC<NotebookCatalogProps> = ({
     } catch {}
   }, [viewMode]);
 
+  const safeDeals = Array.isArray(deals) ? deals : [];
+  const safeOrders = Array.isArray(orders) ? orders : [];
+  const safeProducts = Array.isArray(products) ? products : [];
+  const safeFavorites = Array.isArray(favorites) ? favorites : [];
+  const safeCart = Array.isArray(cart) ? cart : [];
+
   // Set of product IDs that have active deals
   const dealProductIds = useMemo(() => {
     const ids = new Set<string>();
-    deals.filter((d) => d.isActive && !d.isExpired).forEach((d) => {
+    safeDeals.filter((d) => d.isActive && !d.isExpired).forEach((d) => {
       if (d.productId) ids.add(d.productId);
     });
     return ids;
-  }, [deals]);
+  }, [safeDeals]);
 
   // Customer previous order items for the "Reorder" quick shelf
   const customerPastItems = useMemo(() => {
-    if (!user || orders.length === 0) return [];
-    const myOrders = orders.filter(
+    if (!user || safeOrders.length === 0) return [];
+    const myOrders = safeOrders.filter(
       (o) => (o.customerId === user.id || o.customerPhone === user.phone) && o.status !== 'Cancelled'
     );
     const itemIds = new Set<string>();
     myOrders.forEach((o) => {
       o.items?.forEach((i) => itemIds.add(i.productId));
     });
-    return products.filter((p) => itemIds.has(p.id) && p.status !== 'hidden');
-  }, [user, orders, products]);
+    return safeProducts.filter((p) => itemIds.has(p.id) && p.status !== 'hidden');
+  }, [user, safeOrders, safeProducts]);
 
   // Filter products based on search, category, and quick filter tab
   const filteredProducts = useMemo(() => {
-    return products.filter((p) => {
+    return safeProducts.filter((p) => {
       if (p.status === 'hidden') return false;
 
       // Quick filter tabs
-      if (activeFilterTab === 'favorites' && !favorites.includes(p.id)) {
+      if (activeFilterTab === 'favorites' && !safeFavorites.includes(p.id)) {
         return false;
       }
       if (activeFilterTab === 'offers' && !dealProductIds.has(p.id) && !p.name.includes('عرض')) {
@@ -153,8 +159,8 @@ export const NotebookCatalog: React.FC<NotebookCatalogProps> = ({
 
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase().trim();
-        const matchName = p.name.toLowerCase().includes(q);
-        const matchCat = p.category.toLowerCase().includes(q);
+        const matchName = (p.name || '').toLowerCase().includes(q);
+        const matchCat = (p.category || '').toLowerCase().includes(q);
         const matchBrand = p.brand ? p.brand.toLowerCase().includes(q) : false;
         const matchPackaging = p.packaging ? p.packaging.toLowerCase().includes(q) : false;
         const matchDesc = p.description ? p.description.toLowerCase().includes(q) : false;
@@ -163,11 +169,11 @@ export const NotebookCatalog: React.FC<NotebookCatalogProps> = ({
 
       return true;
     });
-  }, [products, searchQuery, selectedCategory, activeFilterTab, favorites, dealProductIds]);
+  }, [safeProducts, searchQuery, selectedCategory, activeFilterTab, safeFavorites, dealProductIds]);
 
-  const totalItemsCount = cart.length;
-  const totalQuantity = cart.reduce((sum, i) => sum + i.quantity, 0);
-  const grandTotal = cart.reduce((sum, i) => sum + i.product.price * i.quantity, 0);
+  const totalItemsCount = safeCart.length;
+  const totalQuantity = safeCart.reduce((sum, i) => sum + i.quantity, 0);
+  const grandTotal = safeCart.reduce((sum, i) => sum + (i.product?.price || 0) * i.quantity, 0);
 
   const getProductQty = (productId: string): number => {
     const item = cart.find((i) => i.product.id === productId);
@@ -197,9 +203,9 @@ export const NotebookCatalog: React.FC<NotebookCatalogProps> = ({
         <div className="bg-amber-50 border border-amber-300 text-amber-950 rounded-2xl p-3.5 flex items-center gap-3 text-xs shadow-2xs">
           <AlertCircle className="w-5 h-5 text-amber-600 shrink-0" />
           <div className="flex-1">
-            <div className="font-black text-amber-900">استقبال الطلبات مغلق حالياً</div>
-            <div className="text-[11px] text-amber-800 mt-0.5">
-              يمكنك تجهيز دفتر أوردراتك وإرساله فور فتح المواعيد الرسمية للتوصيل.
+            <div className="font-black text-amber-900">عذرًا، تم إغلاق استقبال الطلبات حاليًا 🔒</div>
+            <div className="text-[11px] text-amber-800 mt-0.5 font-medium">
+              يمكنك تصفح الكتالوج والأسعار بحرية، ويرجى المحاولة مرة أخرى لاحقًا عند إعادة فتح استقبال الطلبات.
             </div>
           </div>
         </div>
@@ -366,6 +372,7 @@ export const NotebookCatalog: React.FC<NotebookCatalogProps> = ({
           onUpdateCartItem={onUpdateCartItem}
           onSetCartItemQty={onSetCartItemQty}
           onViewAllDeals={() => setShowAllDealsView(true)}
+          isStoreOpen={isStoreOpen}
         />
       )}
 
@@ -377,6 +384,7 @@ export const NotebookCatalog: React.FC<NotebookCatalogProps> = ({
           cartItems={cart}
           onUpdateCartItem={onUpdateCartItem}
           onSetCartItemQty={onSetCartItemQty}
+          isStoreOpen={isStoreOpen}
         />
       )}
 
@@ -414,7 +422,12 @@ export const NotebookCatalog: React.FC<NotebookCatalogProps> = ({
                   </div>
 
                   <div className="mt-2">
-                    {qty === 0 ? (
+                    {!isStoreOpen ? (
+                      <div className="w-full py-1 bg-red-50 border border-red-200 text-red-700 rounded-lg text-[10px] font-bold flex items-center justify-center gap-1">
+                        <Lock className="w-3 h-3" />
+                        <span>مغلق</span>
+                      </div>
+                    ) : qty === 0 ? (
                       <button
                         onClick={() => onUpdateCartItem(item, 1)}
                         className="w-full py-1 bg-emerald-700 hover:bg-emerald-800 text-white rounded-lg text-[10px] font-black flex items-center justify-center gap-1"
@@ -495,6 +508,7 @@ export const NotebookCatalog: React.FC<NotebookCatalogProps> = ({
               onUpdateQty={onUpdateCartItem}
               onSetQty={onSetCartItemQty}
               viewMode="grid"
+              isStoreOpen={isStoreOpen}
             />
           ))}
         </div>
@@ -510,6 +524,7 @@ export const NotebookCatalog: React.FC<NotebookCatalogProps> = ({
               onUpdateQty={onUpdateCartItem}
               onSetQty={onSetCartItemQty}
               viewMode="list"
+              isStoreOpen={isStoreOpen}
             />
           ))}
         </div>

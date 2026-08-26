@@ -11,6 +11,7 @@ interface ProductCardProps {
   onSetQty: (product: Product, qty: number) => void;
   viewMode?: 'grid' | 'list';
   hidePrice?: boolean;
+  isStoreOpen?: boolean;
 }
 
 export const ProductCard: React.FC<ProductCardProps> = ({
@@ -22,8 +23,9 @@ export const ProductCard: React.FC<ProductCardProps> = ({
   onSetQty,
   viewMode = 'list',
   hidePrice = false,
+  isStoreOpen = true,
 }) => {
-  const isLocked = product.status === 'locked';
+  const isLocked = product.status === 'locked' || !isStoreOpen;
   const isPriceActuallyHidden = hidePrice || (product.price === 0 || !product.price);
   const lineTotal = (product.price || 0) * (quantity || 0);
   const lowThreshold = product.lowStockThreshold || 5;

@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { User } from '../types';
+import { BrandLogo } from './BrandLogo';
 import {
   Lock,
   Phone,
@@ -68,6 +69,36 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onLogin
   const handleLoginSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     resetMessages();
+
+    const cleanUser = username.trim();
+    if (!cleanUser) {
+      setError(authRole === 'admin' ? 'يرجى إدخال اسم مستخدم الإدارة' : 'يرجى إدخال رقم الهاتف أو البريد الإلكتروني');
+      return;
+    }
+
+    if (!password) {
+      setError('يرجى إدخال كلمة المرور');
+      return;
+    }
+
+    // Client-side phone / email / username validation
+    const isEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanUser);
+    const cleanPhone = cleanUser.replace(/[\s\-()]/g, '');
+    const isEgyPhone = /^(?:\+20|0020|0)?1[0125][0-9]{8}$/.test(cleanPhone);
+    const isGeneralPhone = /^[0-9]{9,15}$/.test(cleanPhone);
+
+    if (authRole === 'customer') {
+      if (!isEmail && !isEgyPhone && !isGeneralPhone) {
+        setError('يرجى إدخال رقم هاتف محمول صحيح (11 رقماً مثل 010 أو 011 أو 012 أو 015) أو بريد إلكتروني صالح');
+        return;
+      }
+    } else {
+      if (!isEmail && cleanUser.length < 3) {
+        setError('اسم مستخدم الإدارة يجب ألا يقل عن 3 أحرف');
+        return;
+      }
+    }
+
     setLoading(true);
 
     try {
@@ -75,7 +106,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onLogin
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          username: username.trim(),
+          username: cleanUser,
           password,
           rememberMe,
         }),
@@ -104,8 +135,8 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onLogin
       return;
     }
 
-    if (regPassword.length < 6) {
-      setError('كلمة المرور يجب ألا تقل عن 6 خانات');
+    if (regPassword.length < 12) {
+      setError('كلمة المرور يجب ألا تقل عن 12 خانة وتتضمن أحرفاً وأرقاماً ورموزاً');
       return;
     }
 
@@ -179,8 +210,8 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onLogin
       return;
     }
 
-    if (newPassword.length < 6) {
-      setError('كلمة المرور الجديدة يجب ألا تقل عن 6 خانات');
+    if (newPassword.length < 12) {
+      setError('كلمة المرور الجديدة يجب ألا تقل عن 12 خانة وتتضمن أحرفاً وأرقاماً ورموزاً');
       return;
     }
 
@@ -218,12 +249,6 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onLogin
     }
   };
 
-  const handleQuickCustomer = (phone: string, pass: string) => {
-    setUsername(phone);
-    setPassword(pass);
-    resetMessages();
-  };
-
   return (
     <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-fadeIn" dir="rtl">
       <div className="bg-white border border-slate-200 rounded-3xl max-w-sm sm:max-w-md w-full p-5 sm:p-6 text-right shadow-2xl text-slate-800 relative max-h-[90vh] overflow-y-auto">
@@ -235,10 +260,12 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onLogin
         </button>
 
         {/* Brand Header */}
-        <div className="text-center mb-4">
-          <div className="w-12 h-12 bg-emerald-800 rounded-2xl flex items-center justify-center text-white text-xl font-black mx-auto mb-2 shadow-sm">
-            ح
-          </div>
+        <div className="text-center mb-4 flex flex-col items-center">
+          <BrandLogo
+            size="md"
+            variant="light"
+            className="mb-2"
+          />
           <h2 className="text-base sm:text-lg font-black text-slate-900">
             {viewMode === 'login' && 'تسجيل الدخول — شركة الحليم'}
             {viewMode === 'register' && 'إنشاء حساب تاجر جديد'}
@@ -337,8 +364,8 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onLogin
 
             <form onSubmit={handleLoginSubmit} className="space-y-3">
               <div>
-                <label className="block text-xs font-black text-slate-700 mb-1">
-                  {authRole === 'admin' ? 'اسم مستخدم الإدارة' : 'رقم الهاتف أو اسم المستخدم'}
+                <label className="block text-xs font-black text-slate-800 mb-1.5">
+                  {authRole === 'admin' ? 'اسم مستخدم الإدارة أو البريد' : 'رقم الهاتف المسجل أو البريد الإلكتروني'}
                 </label>
                 <div className="relative">
                   <input
@@ -348,22 +375,22 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onLogin
                     onChange={(e) => setUsername(e.target.value)}
                     placeholder={
                       authRole === 'admin'
-                        ? 'MohamedFawzy'
-                        : 'مثال: 01011112222'
+                        ? 'مثال: mohamed.fawzy أو البريد'
+                        : 'مثال: 01011112222 أو name@domain.com'
                     }
-                    className="w-full bg-slate-50 border border-slate-200 focus:border-emerald-700 focus:bg-white rounded-2xl px-3.5 py-2.5 pr-10 text-xs text-slate-900 focus:outline-none transition-all font-bold"
+                    className="w-full bg-white border-2 border-slate-300 focus:border-emerald-700 focus:ring-4 focus:ring-emerald-700/15 rounded-2xl px-3.5 py-3 pr-10 text-xs text-slate-950 placeholder:text-slate-400 focus:outline-none transition-all font-bold shadow-xs"
                   />
                   {authRole === 'admin' ? (
-                    <ShieldCheck className="w-4 h-4 text-slate-400 absolute right-3.5 top-3" />
+                    <ShieldCheck className="w-4 h-4 text-slate-500 absolute right-3.5 top-3.5" />
                   ) : (
-                    <Phone className="w-4 h-4 text-slate-400 absolute right-3.5 top-3" />
+                    <Phone className="w-4 h-4 text-emerald-700 absolute right-3.5 top-3.5" />
                   )}
                 </div>
               </div>
 
               <div>
-                <div className="flex items-center justify-between mb-1">
-                  <label className="block text-xs font-black text-slate-700">كلمة المرور</label>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="block text-xs font-black text-slate-800">كلمة المرور</label>
                   {authRole === 'customer' && (
                     <button
                       type="button"
@@ -372,9 +399,10 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onLogin
                         setForgotPhone(username);
                         resetMessages();
                       }}
-                      className="text-[11px] font-bold text-emerald-800 hover:underline"
+                      className="text-[11px] font-black text-emerald-700 hover:text-emerald-900 underline underline-offset-2 flex items-center gap-1"
                     >
-                      نسيت كلمة المرور؟
+                      <KeyRound className="w-3 h-3" />
+                      <span>نسيت كلمة المرور؟</span>
                     </button>
                   )}
                 </div>
@@ -385,13 +413,13 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onLogin
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                     placeholder="أدخل كلمة المرور..."
-                    className="w-full bg-slate-50 border border-slate-200 focus:border-emerald-700 focus:bg-white rounded-2xl px-3.5 py-2.5 pr-10 pl-10 text-xs text-slate-900 focus:outline-none transition-all font-bold font-mono"
+                    className="w-full bg-white border-2 border-slate-300 focus:border-emerald-700 focus:ring-4 focus:ring-emerald-700/15 rounded-2xl px-3.5 py-3 pr-10 pl-10 text-xs text-slate-950 placeholder:text-slate-400 focus:outline-none transition-all font-bold font-mono shadow-xs"
                   />
-                  <Lock className="w-4 h-4 text-slate-400 absolute right-3.5 top-3" />
+                  <Lock className="w-4 h-4 text-slate-500 absolute right-3.5 top-3.5" />
                   <button
                     type="button"
                     onClick={() => setShowPassword(!showPassword)}
-                    className="absolute left-3 top-2.5 text-slate-400 hover:text-slate-600 p-1"
+                    className="absolute left-3 top-3 text-slate-500 hover:text-slate-800 p-1 transition-colors"
                   >
                     {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                   </button>
@@ -430,41 +458,6 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onLogin
                 )}
               </button>
             </form>
-
-            {/* Customer Demo Switcher */}
-            {authRole === 'customer' && (
-              <div className="mt-4 pt-3.5 border-t border-slate-100">
-                <div className="text-[10px] font-bold text-slate-400 mb-2 text-center">
-                  حسابات تجار تجريبية سريعة:
-                </div>
-                <div className="grid grid-cols-3 gap-1.5 text-[10px]">
-                  <button
-                    type="button"
-                    onClick={() => handleQuickCustomer('01011112222', '123456')}
-                    className="p-1.5 rounded-xl border border-slate-200 bg-slate-50 hover:bg-emerald-50 hover:border-emerald-300 text-slate-700 font-bold text-center transition-colors"
-                  >
-                    <Store className="w-3.5 h-3.5 text-emerald-700 mx-auto mb-0.5" />
-                    <div className="truncate">ماركت الأمل</div>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => handleQuickCustomer('01222223333', '123456')}
-                    className="p-1.5 rounded-xl border border-slate-200 bg-slate-50 hover:bg-emerald-50 hover:border-emerald-300 text-slate-700 font-bold text-center transition-colors"
-                  >
-                    <Store className="w-3.5 h-3.5 text-emerald-700 mx-auto mb-0.5" />
-                    <div className="truncate">ماركت البركة</div>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => handleQuickCustomer('01555556666', '123456')}
-                    className="p-1.5 rounded-xl border border-slate-200 bg-slate-50 hover:bg-emerald-50 hover:border-emerald-300 text-slate-700 font-bold text-center transition-colors"
-                  >
-                    <Store className="w-3.5 h-3.5 text-emerald-700 mx-auto mb-0.5" />
-                    <div className="truncate">ماركت الحمد</div>
-                  </button>
-                </div>
-              </div>
-            )}
           </div>
         )}
 
@@ -545,9 +538,10 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onLogin
                   <input
                     type={showRegPassword ? 'text' : 'password'}
                     required
+                    minLength={12}
                     value={regPassword}
                     onChange={(e) => setRegPassword(e.target.value)}
-                    placeholder="6 خانات على الأقل"
+                    placeholder="12 خانة على الأقل (حروف وأرقام ورموز)"
                     className="w-full bg-slate-50 border border-slate-200 focus:border-emerald-700 focus:bg-white rounded-2xl px-3 py-2 text-xs text-slate-900 focus:outline-none transition-all font-bold font-mono"
                   />
                 </div>
@@ -561,6 +555,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onLogin
                   <input
                     type={showRegPassword ? 'text' : 'password'}
                     required
+                    minLength={12}
                     value={regConfirmPassword}
                     onChange={(e) => setRegConfirmPassword(e.target.value)}
                     placeholder="أعد إدخال الكلمة"
@@ -677,9 +672,10 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onLogin
                     <input
                       type={showNewPassword ? 'text' : 'password'}
                       required
+                      minLength={12}
                       value={newPassword}
                       onChange={(e) => setNewPassword(e.target.value)}
-                      placeholder="6 خانات على الأقل..."
+                      placeholder="12 خانة على الأقل (حروف وأرقام ورموز)..."
                       className="w-full bg-slate-50 border border-slate-200 focus:border-emerald-700 focus:bg-white rounded-2xl px-3.5 py-2 pr-10 text-xs text-slate-900 focus:outline-none transition-all font-bold font-mono"
                     />
                     <Lock className="w-4 h-4 text-slate-400 absolute right-3.5 top-2.5" />
@@ -692,6 +688,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onLogin
                     <input
                       type={showNewPassword ? 'text' : 'password'}
                       required
+                      minLength={12}
                       value={confirmNewPassword}
                       onChange={(e) => setConfirmNewPassword(e.target.value)}
                       placeholder="أعد إدخال كلمة المرور..."

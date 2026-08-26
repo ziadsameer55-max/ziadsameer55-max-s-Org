@@ -15,11 +15,11 @@ interface ReviewOrderModalProps {
 export const ReviewOrderModal: React.FC<ReviewOrderModalProps> = ({
   isOpen,
   onClose,
-  cart: initialCart,
+  cart: initialCart = [],
   user,
   onOrderSuccess,
 }) => {
-  const [items, setItems] = useState<CartItem[]>(initialCart);
+  const [items, setItems] = useState<CartItem[]>(Array.isArray(initialCart) ? initialCart : []);
   const [notes, setNotes] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -28,9 +28,9 @@ export const ReviewOrderModal: React.FC<ReviewOrderModalProps> = ({
 
   const handleQtyChange = (productId: string, delta: number) => {
     setItems((prev) =>
-      prev
+      (Array.isArray(prev) ? prev : [])
         .map((item) => {
-          if (item.product.id === productId) {
+          if (item.product?.id === productId) {
             const next = item.quantity + delta;
             return next > 0 ? { ...item, quantity: next } : null;
           }
@@ -41,11 +41,11 @@ export const ReviewOrderModal: React.FC<ReviewOrderModalProps> = ({
   };
 
   const handleRemoveItem = (productId: string) => {
-    setItems((prev) => prev.filter((item) => item.product.id !== productId));
+    setItems((prev) => (Array.isArray(prev) ? prev : []).filter((item) => item.product?.id !== productId));
   };
 
-  const subtotal = items.reduce((sum, item) => sum + item.product.price * item.quantity, 0);
-  const totalQty = items.reduce((sum, item) => sum + item.quantity, 0);
+  const subtotal = (Array.isArray(items) ? items : []).reduce((sum, item) => sum + (item.product?.price || 0) * item.quantity, 0);
+  const totalQty = (Array.isArray(items) ? items : []).reduce((sum, item) => sum + item.quantity, 0);
 
   const handleSubmitOrder = async () => {
     if (items.length === 0) return;

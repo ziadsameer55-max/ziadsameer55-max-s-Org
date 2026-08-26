@@ -47,7 +47,7 @@ interface CustomerAccountProps {
 export const CustomerAccount: React.FC<CustomerAccountProps> = ({
   user,
   settings,
-  orders,
+  orders = [],
   onOpenLogin,
   onLogout,
   onNavigateToTab,
@@ -133,8 +133,8 @@ export const CustomerAccount: React.FC<CustomerAccountProps> = ({
       return;
     }
 
-    if (newPassword.length < 6) {
-      setPasswordMsg({ type: 'error', text: 'كلمة المرور الجديدة يجب ألا تقل عن 6 خانات' });
+    if (newPassword.length < 12) {
+      setPasswordMsg({ type: 'error', text: 'كلمة المرور الجديدة يجب ألا تقل عن 12 خانة وتتضمن أحرفاً وأرقاماً ورموزاً' });
       return;
     }
 
@@ -220,7 +220,8 @@ export const CustomerAccount: React.FC<CustomerAccountProps> = ({
     );
   }
 
-  const myOrders = orders.filter(
+  const safeOrders = Array.isArray(orders) ? orders : [];
+  const myOrders = safeOrders.filter(
     (o) => o.customerId === user.id || o.customerPhone === user.phone
   );
 
@@ -351,14 +352,6 @@ export const CustomerAccount: React.FC<CustomerAccountProps> = ({
           </div>
 
           <div className="flex items-center gap-1 shrink-0">
-            <button
-              onClick={onOpenLogin}
-              className="p-2 text-slate-400 hover:text-emerald-700 hover:bg-emerald-50 rounded-xl transition-colors text-xs font-bold flex items-center gap-1"
-              title="دخول حساب آخر / لوحة الإدارة"
-            >
-              <ShieldCheck className="w-4 h-4 text-emerald-700" />
-              <span className="hidden sm:inline text-[11px]">دخول الإدارة</span>
-            </button>
             <button
               onClick={onLogout}
               className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-xl transition-colors shrink-0"
@@ -948,9 +941,10 @@ export const CustomerAccount: React.FC<CustomerAccountProps> = ({
                   <input
                     type="password"
                     required
+                    minLength={12}
                     value={newPassword}
                     onChange={(e) => setNewPassword(e.target.value)}
-                    placeholder="6 خانات على الأقل..."
+                    placeholder="12 خانة على الأقل (حروف وأرقام ورموز)..."
                     className="w-full bg-slate-50 border border-slate-200 focus:border-emerald-700 focus:bg-white rounded-2xl px-3.5 py-2 text-xs font-mono font-bold text-slate-800 focus:outline-none"
                   />
                 </div>

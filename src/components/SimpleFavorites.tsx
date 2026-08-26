@@ -12,26 +12,32 @@ interface SimpleFavoritesProps {
   onSetCartItemQty: (product: Product, qty: number) => void;
   onOpenCart: () => void;
   onNavigateToCatalog: () => void;
+  isStoreOpen?: boolean;
 }
 
 export const SimpleFavorites: React.FC<SimpleFavoritesProps> = ({
-  products,
-  favorites,
-  cart,
+  products = [],
+  favorites = [],
+  cart = [],
   onToggleFavorite,
   onUpdateCartItem,
   onSetCartItemQty,
   onOpenCart,
   onNavigateToCatalog,
+  isStoreOpen = true,
 }) => {
-  const favoriteProducts = products.filter((p) => favorites.includes(p.id));
+  const safeProducts = Array.isArray(products) ? products : [];
+  const safeFavorites = Array.isArray(favorites) ? favorites : [];
+  const safeCart = Array.isArray(cart) ? cart : [];
 
-  const totalItemsCount = cart.length;
-  const totalQuantity = cart.reduce((sum, i) => sum + i.quantity, 0);
-  const grandTotal = cart.reduce((sum, i) => sum + i.product.price * i.quantity, 0);
+  const favoriteProducts = safeProducts.filter((p) => safeFavorites.includes(p.id));
+
+  const totalItemsCount = safeCart.length;
+  const totalQuantity = safeCart.reduce((sum, i) => sum + i.quantity, 0);
+  const grandTotal = safeCart.reduce((sum, i) => sum + (i.product?.price || 0) * i.quantity, 0);
 
   const getProductQty = (productId: string): number => {
-    const item = cart.find((i) => i.product.id === productId);
+    const item = safeCart.find((i) => i.product?.id === productId);
     return item ? item.quantity : 0;
   };
 
@@ -66,7 +72,7 @@ export const SimpleFavorites: React.FC<SimpleFavoritesProps> = ({
         <div className="divide-y divide-slate-100 bg-white border border-slate-200 rounded-2xl shadow-xs overflow-hidden">
           {favoriteProducts.map((product) => {
             const qty = getProductQty(product.id);
-            const isLocked = product.status === 'locked';
+            const isLocked = product.status === 'locked' || !isStoreOpen;
 
             return (
               <div

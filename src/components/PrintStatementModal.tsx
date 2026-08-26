@@ -1,5 +1,6 @@
 import React, { useState, useMemo, useRef } from 'react';
 import { Order, PaymentTransaction, SystemSettings } from '../types';
+import logoImg from '../assets/images/alhalim_logo_1787745934656.jpg';
 import {
   Printer,
   X,
@@ -64,8 +65,8 @@ export const PrintStatementModal: React.FC<PrintStatementModalProps> = ({
   onClose,
   customer,
   settings,
-  orders,
-  payments,
+  orders = [],
+  payments = [],
   summary: propSummary,
 }) => {
   const [printFormat, setPrintFormat] = useState<'A4' | '80mm'>('A4');
@@ -88,9 +89,12 @@ export const PrintStatementModal: React.FC<PrintStatementModalProps> = ({
     return 0;
   };
 
+  const safeOrders = Array.isArray(orders) ? orders : [];
+  const safePayments = Array.isArray(payments) ? payments : [];
+
   // Build Chronological Ledger Movements
   const { ledgerRows, calcSummary } = useMemo(() => {
-    const validOrders = orders.filter((o) => o.status !== 'Cancelled');
+    const validOrders = safeOrders.filter((o) => o.status !== 'Cancelled');
     const allEvents: {
       id: string;
       type: 'invoice' | 'payment';
@@ -333,8 +337,14 @@ export const PrintStatementModal: React.FC<PrintStatementModalProps> = ({
             }`}
             style={{ fontFamily: "'Cairo', sans-serif" }}
           >
-            {/* 1. Official Header with Updated Alexandria Address */}
-            <div className="text-center pb-3 border-b-2 border-slate-900">
+            {/* 1. Official Header with Updated Alexandria Address & Logo */}
+            <div className="text-center pb-3 border-b-2 border-slate-900 flex flex-col items-center">
+              <img
+                src={logoImg}
+                alt="شركة الحليم للتجارة والتوزيع"
+                referrerPolicy="no-referrer"
+                className="w-16 h-16 object-contain mb-1"
+              />
               <h1 className="text-lg sm:text-xl font-black tracking-tight text-slate-950">
                 شركة الحليم للتجارة والتوزيع
               </h1>

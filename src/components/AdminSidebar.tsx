@@ -1,5 +1,6 @@
 import React from 'react';
 import { User, SystemSettings, Order, Product } from '../types';
+import { BrandLogo } from './BrandLogo';
 import {
   ClipboardList,
   Wallet,
@@ -14,6 +15,7 @@ import {
   X,
   ExternalLink,
   Sparkles,
+  DollarSign,
 } from 'lucide-react';
 
 interface AdminSidebarProps {
@@ -34,14 +36,16 @@ export const AdminSidebar: React.FC<AdminSidebarProps> = ({
   setActiveTab,
   user,
   settings,
-  orders,
-  products,
+  orders = [],
+  products = [],
   onToggleOrdersOpen,
   onLogout,
   isOpenMobile = false,
   onCloseMobile,
 }) => {
-  const pendingOrdersCount = orders.filter((o) => o.status === 'Pending').length;
+  const safeOrders = Array.isArray(orders) ? orders : [];
+  const safeProducts = Array.isArray(products) ? products : [];
+  const pendingOrdersCount = safeOrders.filter((o) => o.status === 'Pending').length;
   const isOrdersOpen = settings?.manualOrdersOpen ?? true;
 
   const navItems = [
@@ -49,8 +53,15 @@ export const AdminSidebar: React.FC<AdminSidebarProps> = ({
       id: 'admin-orders',
       label: 'دفتر الطلبات',
       icon: ClipboardList,
-      badge: pendingOrdersCount > 0 ? `${pendingOrdersCount} جديد` : `${orders.length}`,
+      badge: pendingOrdersCount > 0 ? `${pendingOrdersCount} جديد` : `${safeOrders.length}`,
       badgeColor: pendingOrdersCount > 0 ? 'bg-amber-500 text-slate-950 font-black' : 'bg-slate-700 text-slate-300',
+    },
+    {
+      id: 'admin-customers',
+      label: 'حسابات العملاء',
+      icon: UserCheck,
+      badge: 'العملاء',
+      badgeColor: 'bg-blue-600 text-white font-bold',
     },
     {
       id: 'admin-debts',
@@ -58,6 +69,13 @@ export const AdminSidebar: React.FC<AdminSidebarProps> = ({
       icon: Wallet,
       badge: 'الخزينة',
       badgeColor: 'bg-emerald-600 text-white font-bold',
+    },
+    {
+      id: 'admin-collections',
+      label: 'التحصيل والمقبوضات',
+      icon: DollarSign,
+      badge: 'تقرير 💰',
+      badgeColor: 'bg-amber-400 text-slate-950 font-black',
     },
     {
       id: 'admin-products',
@@ -88,14 +106,15 @@ export const AdminSidebar: React.FC<AdminSidebarProps> = ({
       <div className="p-4 border-b border-slate-800/80">
         <div className="flex items-center justify-between mb-3">
           <div className="flex items-center gap-2.5">
-            <div className="w-9 h-9 rounded-xl bg-amber-400 text-slate-950 flex items-center justify-center font-black text-lg shadow-sm">
-              ح
-            </div>
+            <BrandLogo
+              size="sm"
+              variant="plain"
+            />
             <div>
               <h2 className="font-black text-sm text-white leading-tight">
                 لوحة تحكم الإدارة
               </h2>
-              <span className="text-[11px] text-slate-400">شركة الحليم للتجارة</span>
+              <span className="text-[11px] text-amber-400 font-bold">شركة الحليم للتجارة</span>
             </div>
           </div>
 

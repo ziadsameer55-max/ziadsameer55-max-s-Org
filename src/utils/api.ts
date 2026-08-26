@@ -3,7 +3,7 @@ export function getAuthToken(): string {
     const saved = localStorage.getItem('halim_user');
     if (saved) {
       const parsed = JSON.parse(saved);
-      return parsed.token || (parsed.role === 'admin' ? 'halim_admin_master_token' : '');
+      return parsed.token || '';
     }
   } catch {}
   return '';

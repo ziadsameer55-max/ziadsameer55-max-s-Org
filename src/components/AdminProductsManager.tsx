@@ -25,8 +25,8 @@ interface AdminProductsManagerProps {
 }
 
 export const AdminProductsManager: React.FC<AdminProductsManagerProps> = ({
-  products,
-  categories,
+  products = [],
+  categories = [],
   onRefreshData,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
@@ -48,8 +48,11 @@ export const AdminProductsManager: React.FC<AdminProductsManagerProps> = ({
     setTimeout(() => setToastMessage(null), 3500);
   };
 
+  const safeProducts = Array.isArray(products) ? products : [];
+  const safeCategories = Array.isArray(categories) ? categories : [];
+
   // Filter products
-  const filteredProducts = products.filter((p) => {
+  const filteredProducts = safeProducts.filter((p) => {
     if (categoryFilter !== 'all' && p.category !== categoryFilter) return false;
     if (statusFilter !== 'all' && (p.status || 'open') !== statusFilter) return false;
     
@@ -61,7 +64,7 @@ export const AdminProductsManager: React.FC<AdminProductsManagerProps> = ({
 
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase().trim();
-      return p.name.toLowerCase().includes(q) || p.category.toLowerCase().includes(q);
+      return (p.name || '').toLowerCase().includes(q) || (p.category || '').toLowerCase().includes(q);
     }
     return true;
   });

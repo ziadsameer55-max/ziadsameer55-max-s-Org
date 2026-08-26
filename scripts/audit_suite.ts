@@ -1,6 +1,8 @@
-import { getDb, saveDb, NEW_ADMIN_CREDENTIALS } from '../src/server/db.js';
+import { getDb, saveDb } from '../src/server/db.js';
 
 const BASE_URL = 'http://127.0.0.1:3000';
+const ADMIN_USERNAME = process.env.ADMIN_USERNAME || 'MohamedFawzy';
+const ADMIN_PASSWORD = process.env.ADMIN_INITIAL_PASSWORD || 'Mf!7Qz#29vL@8Kx$4Np';
 
 interface TestResult {
   scenario: string;
@@ -33,8 +35,8 @@ async function runAudit() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        username: NEW_ADMIN_CREDENTIALS.username,
-        password: NEW_ADMIN_CREDENTIALS.passwordPlain,
+        username: ADMIN_USERNAME,
+        password: ADMIN_PASSWORD,
       }),
     });
     const data = await res.json();
@@ -223,6 +225,70 @@ async function runAudit() {
     record('Customer Security', 'Customer A blocked from accessing All Debts Overview', pass, `HTTP status ${res.status}`);
   } catch (e: any) {
     record('Customer Security', 'Customer A blocked from accessing All Debts Overview', false, e.message);
+  }
+
+  // Customer Isolation on Payments Endpoint
+  try {
+    // 1. Unauthenticated request to /api/payments -> 401
+    const unauthPay = await fetch(`${BASE_URL}/api/payments`);
+    record('Customer Security', 'Unauthenticated Access to Payments Blocked (401)', unauthPay.status === 401, `HTTP status ${unauthPay.status}`);
+
+    // 2. Customer A receives only their own payments
+    const custAPayRes = await fetch(`${BASE_URL}/api/payments`, {
+      headers: { 'Authorization': `Bearer ${customerAToken}` },
+    });
+    const custAPayData = await custAPayRes.json();
+    const onlyA = Array.isArray(custAPayData) && custAPayData.every((p: any) => p.customerId === customerAId);
+    record('Customer Security', 'Customer A can only view their own payments', onlyA, `Retrieved ${custAPayData.length} records`);
+  } catch (e: any) {
+    record('Customer Security', 'Customer Payments Isolation', false, e.message);
+  }
+
+  // -------------------------------------------------------------------------
+  // DATABASE & INFRASTRUCTURE PROTECTION
+  // -------------------------------------------------------------------------
+  try {
+    const dbFileRes = await fetch(`${BASE_URL}/data/halim.sqlite`);
+    const envFileRes = await fetch(`${BASE_URL}/.env`);
+    const dotDotRes = await fetch(`${BASE_URL}/api/../data/halim.sqlite`);
+
+    const protectedDb = dbFileRes.status === 403;
+    const protectedEnv = envFileRes.status === 403;
+    const protectedDot = dotDotRes.status === 403;
+
+    record(
+      'Infrastructure Security',
+      'Direct Access to SQLite DB and .env Blocked (403)',
+      protectedDb && protectedEnv && protectedDot,
+      `DB Status: ${dbFileRes.status}, .env Status: ${envFileRes.status}, DotDot: ${dotDotRes.status}`
+    );
+  } catch (e: any) {
+    record('Infrastructure Security', 'Direct Access Protection', false, e.message);
+  }
+
+  // -------------------------------------------------------------------------
+  // PASSWORD POLICY & STRENGTH ENFORCEMENT
+  // -------------------------------------------------------------------------
+  try {
+    const weakPhone = `01011${Math.floor(100000 + Math.random() * 900000)}`;
+    const weakRegRes = await fetch(`${BASE_URL}/api/auth/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        fullName: 'حساب اختبار كلمة مرور ضعيفة',
+        phone: weakPhone,
+        password: 'password123', // common weak password
+      }),
+    });
+    const weakData = await weakRegRes.json();
+    record(
+      'Password Security',
+      'Reject Common/Weak Password Registration (400)',
+      weakRegRes.status === 400 && !weakData.success,
+      `Response: ${weakData.error || weakData.message}`
+    );
+  } catch (e: any) {
+    record('Password Security', 'Password Policy Enforcement', false, e.message);
   }
 
   // -------------------------------------------------------------------------
@@ -456,6 +522,69 @@ async function runAudit() {
       body: JSON.stringify({ amount: 100 }),
     });
     record('Payment Security', 'Customer Account Blocked from Recording Payments', resCustPay.status === 403, `HTTP status ${resCustPay.status}`);
+
+    // 5. Partial Collection: Debt is 7,500 -> Pay 2,000 -> Remaining Debt = 5,500
+    const partialRes = await fetch(`${BASE_URL}/api/customers/${debtCustId}/collect`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${adminToken}` },
+      body: JSON.stringify({ amount: 2000, paymentMethod: 'Cash', notes: 'دفعة جزئية تجريبية' }),
+    });
+    const partialData = await partialRes.json();
+
+    const partialStmtRes = await fetch(`${BASE_URL}/api/customers/${debtCustId}/statement`, {
+      headers: { 'Authorization': `Bearer ${adminToken}` },
+    });
+    const partialStmtData = await partialStmtRes.json();
+    const afterPartialDebt = partialStmtData.summary.totalDebt;
+    record(
+      'Payment Security',
+      '🟡 Partial Collection: Debt 7,500 -> Pay 2,000 -> Remaining 5,500',
+      partialData.success && afterPartialDebt === 5500,
+      `Paid 2,000, Remaining in DB: ${afterPartialDebt} (Expected: 5,500)`
+    );
+
+    // 6. Security Check: Customer blocked from full debt settlement endpoint
+    const custFullSettleRes = await fetch(`${BASE_URL}/api/customers/${debtCustId}/settle-full`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${debtCustToken}` },
+      body: JSON.stringify({ paymentMethod: 'Cash' }),
+    });
+    record('Payment Security', 'Customer Blocked from Full Debt Settlement Endpoint (403)', custFullSettleRes.status === 403, `HTTP status ${custFullSettleRes.status}`);
+
+    // 7. Full Debt Settlement (Admin Only): Remaining 5,500 -> Settle Full -> Remaining = 0 & All orders Paid
+    const fullSettleRes = await fetch(`${BASE_URL}/api/customers/${debtCustId}/settle-full`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${adminToken}` },
+      body: JSON.stringify({ paymentMethod: 'VodafoneCash', notes: 'سداد كامل مستحقات الحساب' }),
+    });
+    const fullSettleData = await fullSettleRes.json();
+
+    const fullStmtRes = await fetch(`${BASE_URL}/api/customers/${debtCustId}/statement`, {
+      headers: { 'Authorization': `Bearer ${adminToken}` },
+    });
+    const fullStmtData = await fullStmtRes.json();
+    const afterFullDebt = fullStmtData.summary.totalDebt;
+    const allOrdersPaid = fullStmtData.orders.every((o: any) => o.remainingBalance === 0 && o.paymentStatus === 'Paid');
+
+    record(
+      'Payment Security',
+      '🟢 Full Debt Settlement: Settle remaining 5,500 -> Remaining = 0 & all orders Paid',
+      fullSettleData.success && fullSettleData.settledAmount === 5500 && afterFullDebt === 0 && allOrdersPaid,
+      `Settled Amount: ${fullSettleData.settledAmount}, Remaining: ${afterFullDebt}, All Orders Paid: ${allOrdersPaid}`
+    );
+
+    // 8. Attempt full settlement when debt is already 0 -> should reject with 400
+    const zeroDebtSettleRes = await fetch(`${BASE_URL}/api/customers/${debtCustId}/settle-full`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${adminToken}` },
+      body: JSON.stringify({ paymentMethod: 'Cash' }),
+    });
+    record(
+      'Payment Security',
+      'Reject Full Settlement when Debt is 0 EGP',
+      zeroDebtSettleRes.status === 400,
+      `HTTP status ${zeroDebtSettleRes.status}`
+    );
   } catch (e: any) {
     record('Payment Security', 'Payment Security Tests', false, e.message);
   }

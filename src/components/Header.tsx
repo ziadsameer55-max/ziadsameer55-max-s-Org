@@ -1,13 +1,17 @@
-import React from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { User, SystemSettings } from '../types';
+import { BrandLogo } from './BrandLogo';
 import {
   ShoppingCart,
   ShieldCheck,
   User as UserIcon,
   Store,
-  Bell,
   LogIn,
-  Layers,
+  Package,
+  Wallet,
+  RotateCcw,
+  LogOut,
+  ChevronDown,
 } from 'lucide-react';
 
 interface HeaderProps {
@@ -19,6 +23,7 @@ interface HeaderProps {
   unpaidDebt?: number;
   onOpenCart: () => void;
   onOpenLogin: () => void;
+  onLogout?: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -30,8 +35,22 @@ export const Header: React.FC<HeaderProps> = ({
   unpaidDebt = 0,
   onOpenCart,
   onOpenLogin,
+  onLogout,
 }) => {
   const isAdmin = user?.role === 'admin';
+  const [isDropdownOpen, setIsDropdownOpen] = useState(false);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+
+  // Close dropdown on outside click
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+        setIsDropdownOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
 
   return (
     <header className="bg-emerald-900 text-white shadow-md sticky top-0 z-40 no-print select-none border-b border-emerald-800" dir="rtl">
@@ -39,21 +58,23 @@ export const Header: React.FC<HeaderProps> = ({
         {/* Brand Logo & Name */}
         <div
           onClick={() => setActiveTab(isAdmin && activeTab.startsWith('admin') ? 'admin-orders' : 'catalog')}
-          className="flex items-center gap-2 cursor-pointer"
+          className="flex items-center gap-2.5 cursor-pointer group"
         >
-          <div className="w-9 h-9 rounded-xl bg-white text-emerald-900 flex items-center justify-center font-black text-lg shadow-xs">
-            ح
-          </div>
+          <BrandLogo
+            size="sm"
+            variant="glass"
+            className="group-hover:scale-105 transition-transform"
+          />
           <div>
             <div className="flex items-center gap-1.5">
-              <h1 className="text-sm sm:text-base font-black leading-none">
+              <h1 className="text-sm sm:text-base font-black leading-none group-hover:text-amber-300 transition-colors">
                 شركة الحليم
               </h1>
-              <span className="bg-amber-400 text-slate-950 font-black text-[9px] px-1.5 py-0.2 rounded font-mono uppercase tracking-wider">
+              <span className="bg-amber-400 text-slate-950 font-black text-[9px] px-1.5 py-0.2 rounded font-mono uppercase tracking-wider shadow-2xs">
                 جملة B2B
               </span>
             </div>
-            <p className="text-[10px] text-emerald-200 mt-0.5 leading-tight">
+            <p className="text-[10px] text-emerald-200 mt-0.5 leading-tight font-medium">
               للتجارة والتوزيع والتوريدات
             </p>
           </div>
@@ -98,17 +119,101 @@ export const Header: React.FC<HeaderProps> = ({
             </div>
           )}
 
-          {/* User Account / Login Button */}
+          {/* User Account / Menu Dropdown */}
           {user ? (
-            <button
-              onClick={() => setActiveTab('account')}
-              className="flex items-center gap-1.5 bg-emerald-800/80 hover:bg-emerald-800 text-emerald-100 px-2.5 py-1.5 rounded-xl text-xs font-bold transition-colors border border-emerald-700/60"
-            >
-              <UserIcon className="w-3.5 h-3.5 text-emerald-300" />
-              <span className="max-w-[80px] sm:max-w-[110px] truncate text-[11px]">
-                {user.storeName || user.fullName}
-              </span>
-            </button>
+            <div className="relative" ref={dropdownRef}>
+              <button
+                onClick={() => setIsDropdownOpen(!isDropdownOpen)}
+                className="flex items-center gap-1.5 bg-emerald-800/90 hover:bg-emerald-800 text-emerald-100 px-2.5 py-1.5 rounded-xl text-xs font-bold transition-all border border-emerald-700/60 shadow-xs"
+                title="قائمة الحساب"
+              >
+                <UserIcon className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                <span className="max-w-[90px] sm:max-w-[130px] truncate text-[11px]">
+                  مرحبًا، {user.fullName ? user.fullName.split(' ')[0] : user.storeName || 'العميل'}
+                </span>
+                <ChevronDown className={`w-3 h-3 text-emerald-300 transition-transform ${isDropdownOpen ? 'rotate-180' : ''}`} />
+              </button>
+
+              {/* Account Dropdown Menu */}
+              {isDropdownOpen && (
+                <div className="absolute left-0 mt-2 w-56 bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl py-2 z-50 animate-in fade-in zoom-in-95 duration-100">
+                  {/* Greeting & Store Name Header */}
+                  <div className="px-3.5 py-2 border-b border-slate-800">
+                    <p className="text-xs font-black text-white truncate">
+                      مرحبًا، {user.fullName}
+                    </p>
+                    {user.storeName && (
+                      <p className="text-[10px] text-amber-400 font-bold truncate mt-0.5">
+                        🏪 {user.storeName}
+                      </p>
+                    )}
+                  </div>
+
+                  {/* Navigation Links */}
+                  <div className="py-1">
+                    <button
+                      onClick={() => {
+                        setIsDropdownOpen(false);
+                        setActiveTab('account');
+                      }}
+                      className="w-full text-right px-3.5 py-2 text-xs text-slate-200 hover:bg-emerald-800/40 hover:text-white flex items-center gap-2 font-bold transition-colors"
+                    >
+                      <UserIcon className="w-3.5 h-3.5 text-emerald-400" />
+                      <span>👤 حسابي</span>
+                    </button>
+
+                    <button
+                      onClick={() => {
+                        setIsDropdownOpen(false);
+                        setActiveTab('orders');
+                      }}
+                      className="w-full text-right px-3.5 py-2 text-xs text-slate-200 hover:bg-emerald-800/40 hover:text-white flex items-center gap-2 font-bold transition-colors"
+                    >
+                      <Package className="w-3.5 h-3.5 text-emerald-400" />
+                      <span>📦 طلباتي</span>
+                    </button>
+
+                    <button
+                      onClick={() => {
+                        setIsDropdownOpen(false);
+                        setActiveTab('account');
+                      }}
+                      className="w-full text-right px-3.5 py-2 text-xs text-slate-200 hover:bg-emerald-800/40 hover:text-white flex items-center gap-2 font-bold transition-colors"
+                    >
+                      <Wallet className="w-3.5 h-3.5 text-amber-400" />
+                      <span>💰 حسابي ومديونيتي</span>
+                    </button>
+
+                    <button
+                      onClick={() => {
+                        setIsDropdownOpen(false);
+                        setActiveTab('orders');
+                      }}
+                      className="w-full text-right px-3.5 py-2 text-xs text-slate-200 hover:bg-emerald-800/40 hover:text-white flex items-center gap-2 font-bold transition-colors"
+                    >
+                      <RotateCcw className="w-3.5 h-3.5 text-emerald-400" />
+                      <span>🔄 إعادة الطلب</span>
+                    </button>
+                  </div>
+
+                  {/* Logout Button */}
+                  {onLogout && (
+                    <div className="pt-1 mt-1 border-t border-slate-800">
+                      <button
+                        onClick={() => {
+                          setIsDropdownOpen(false);
+                          onLogout();
+                        }}
+                        className="w-full text-right px-3.5 py-2 text-xs text-red-400 hover:bg-red-950/40 hover:text-red-300 flex items-center gap-2 font-black transition-colors"
+                      >
+                        <LogOut className="w-3.5 h-3.5" />
+                        <span>🚪 تسجيل الخروج</span>
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
           ) : (
             <button
               onClick={onOpenLogin}

@@ -27,6 +27,7 @@ import {
 } from 'lucide-react';
 import { CartItem } from './NotebookCatalog';
 import { apiFetch } from '../utils/api';
+import { checkIsStoreOpen } from '../utils/orderStatus';
 
 interface BottomSheetCartProps {
   isOpen: boolean;
@@ -48,7 +49,7 @@ interface BottomSheetCartProps {
 export const BottomSheetCart: React.FC<BottomSheetCartProps> = ({
   isOpen,
   onClose,
-  cart,
+  cart = [],
   allProducts = [],
   user,
   settings,
@@ -86,10 +87,13 @@ export const BottomSheetCart: React.FC<BottomSheetCartProps> = ({
     Array<{ productId: string; productName: string; oldPrice: number; newPrice: number }>
   >([]);
 
+  const safeCart = Array.isArray(cart) ? cart : [];
+  const safeAllProducts = Array.isArray(allProducts) ? allProducts : [];
+
   // Sync editItems with incoming cart when opened or when cart changes outside edit mode
   useEffect(() => {
     if (isOpen) {
-      setEditItems(cart.map((item) => ({ ...item })));
+      setEditItems(safeCart.map((item) => ({ ...item })));
       setError('');
       setSaveSuccessMsg('');
       setPriceChangeWarnings([]);
@@ -99,7 +103,7 @@ export const BottomSheetCart: React.FC<BottomSheetCartProps> = ({
   if (!isOpen) return null;
 
   // Active items based on mode
-  const currentItems = mode === 'edit' ? editItems : cart;
+  const currentItems = mode === 'edit' ? editItems : safeCart;
   const isPricesHidden = user?.role !== 'admin' && Boolean(settings?.hidePrices);
 
   // Summary Totals
@@ -107,23 +111,34 @@ export const BottomSheetCart: React.FC<BottomSheetCartProps> = ({
   const totalQuantity = currentItems.reduce((sum, i) => sum + i.quantity, 0);
   const grandTotal = isPricesHidden
     ? 0
-    : currentItems.reduce((sum, i) => sum + (i.product.price || 0) * i.quantity, 0);
+    : currentItems.reduce((sum, i) => sum + (i.product?.price || 0) * i.quantity, 0);
 
   // Filtered products for quick add in edit mode
-  const availableToAddProducts = allProducts.filter((p) => {
+  const availableToAddProducts = safeAllProducts.filter((p) => {
     if (p.status === 'hidden' || p.status === 'locked') return false;
-    const isAlreadyInCart = editItems.some((item) => item.product.id === p.id);
+    const isAlreadyInCart = editItems.some((item) => item.product?.id === p.id);
     if (isAlreadyInCart) return false;
     if (!productSearchQuery.trim()) return true;
     const q = productSearchQuery.trim().toLowerCase();
     return (
-      p.name.toLowerCase().includes(q) ||
+      (p.name || '').toLowerCase().includes(q) ||
       (p.category && p.category.toLowerCase().includes(q)) ||
       (p.packaging && p.packaging.toLowerCase().includes(q))
     );
   });
 
   // --- Handlers for Edit Mode ---
+  const handleProceedToCheckout = () => {
+    // Check if store is open
+    const storeStatus = checkIsStoreOpen(settings);
+    if (!storeStatus.isOpen && user?.role !== 'admin') {
+      setError(storeStatus.reason || 'عذرًا، تم إغلاق استقبال الطلبات حاليًا. يرجى المحاولة مرة أخرى لاحقًا.');
+      return;
+    }
+    setError('');
+    setMode('checkout');
+  };
+
   const handleStartEdit = () => {
     setEditItems(cart.map((i) => ({ ...i })));
     setMode('edit');
@@ -253,6 +268,13 @@ export const BottomSheetCart: React.FC<BottomSheetCartProps> = ({
   const handleFinalSubmit = async () => {
     if (cart.length === 0) return;
 
+    // Check store open status before sending
+    const storeStatus = checkIsStoreOpen(settings);
+    if (!storeStatus.isOpen && user?.role !== 'admin') {
+      setError(storeStatus.reason || 'عذرًا، تم إغلاق استقبال الطلبات حاليًا. يرجى المحاولة مرة أخرى لاحقًا.');
+      return;
+    }
+
     const finalName = user ? user.fullName : guestName.trim();
     const finalPhone = user ? user.phone : guestPhone.trim();
     const finalStore = user?.storeName || guestStore.trim() || 'سوبر ماركت / محل تجاري';
@@ -301,7 +323,11 @@ export const BottomSheetCart: React.FC<BottomSheetCartProps> = ({
         onClose();
         onSubmitSuccess(data.order);
       } else {
-        setError(data.error || 'فشل إرسال الطلب، يرجى المحاولة مرة أخرى');
+        if (data.code === 'STORE_CLOSED' || data.storeClosed) {
+          setError(data.error || 'عذرًا، تم إغلاق استقبال الطلبات حاليًا ولا يمكن تأكيد الطلب.');
+        } else {
+          setError(data.error || 'فشل إرسال الطلب، يرجى المحاولة مرة أخرى');
+        }
       }
     } catch (err) {
       setError('تعذر الاتصال بالخادم، يرجى التحقق من اتصال الإنترنت');
@@ -394,6 +420,19 @@ export const BottomSheetCart: React.FC<BottomSheetCartProps> = ({
                   </span>
                 </div>
               ))}
+            </div>
+          </div>
+        )}
+
+        {/* Closed Store Notice */}
+        {!checkIsStoreOpen(settings).isOpen && user?.role !== 'admin' && (
+          <div className="mx-4 mt-3 p-3 bg-red-50 border border-red-300 text-red-800 text-xs font-bold rounded-2xl flex items-center gap-2 shadow-2xs">
+            <AlertCircle className="w-5 h-5 text-red-600 shrink-0" />
+            <div>
+              <div className="font-black text-red-900">عذرًا، تم إغلاق استقبال الطلبات حاليًا 🔒</div>
+              <div className="text-[11px] text-red-700 mt-0.5 font-medium">
+                يرجى المحاولة مرة أخرى لاحقًا عند إعادة فتح استقبال الطلبات من الإدارة.
+              </div>
             </div>
           </div>
         )}
@@ -524,11 +563,24 @@ export const BottomSheetCart: React.FC<BottomSheetCartProps> = ({
 
                   {/* Proceed to Checkout Button */}
                   <button
-                    onClick={() => setMode('checkout')}
-                    className="py-3.5 px-4 bg-emerald-800 hover:bg-emerald-900 active:scale-98 text-white font-black text-xs sm:text-sm rounded-2xl shadow-md transition-all flex items-center justify-center gap-2"
+                    onClick={handleProceedToCheckout}
+                    className={`py-3.5 px-4 active:scale-98 text-white font-black text-xs sm:text-sm rounded-2xl shadow-md transition-all flex items-center justify-center gap-2 ${
+                      !checkIsStoreOpen(settings).isOpen && user?.role !== 'admin'
+                        ? 'bg-slate-700 hover:bg-slate-800'
+                        : 'bg-emerald-800 hover:bg-emerald-900'
+                    }`}
                   >
-                    <span>متابعة لإتمام الطلب</span>
-                    <span className="text-base font-bold">←</span>
+                    {!checkIsStoreOpen(settings).isOpen && user?.role !== 'admin' ? (
+                      <>
+                        <Lock className="w-4 h-4 shrink-0" />
+                        <span>استقبال الطلبات مغلق</span>
+                      </>
+                    ) : (
+                      <>
+                        <span>متابعة لإتمام الطلب</span>
+                        <span className="text-base font-bold">←</span>
+                      </>
+                    )}
                   </button>
                 </div>
               </div>

@@ -7,7 +7,9 @@ interface BestsellersShelfProps {
   settings: SystemSettings | null;
   cartItems: Array<{ product: Product; quantity: number }>;
   onUpdateCartItem: (product: Product, delta: number) => void;
+  onSetItemQty?: (product: Product, quantity: number) => void;
   onSetCartItemQty: (product: Product, quantity: number) => void;
+  isStoreOpen?: boolean;
 }
 
 export const BestsellersShelf: React.FC<BestsellersShelfProps> = ({
@@ -16,6 +18,7 @@ export const BestsellersShelf: React.FC<BestsellersShelfProps> = ({
   cartItems,
   onUpdateCartItem,
   onSetCartItemQty,
+  isStoreOpen = true,
 }) => {
   const isPricesHidden = Boolean(settings?.hidePrices);
 
@@ -127,7 +130,12 @@ export const BestsellersShelf: React.FC<BestsellersShelfProps> = ({
 
                   {/* Cart button */}
                   <div className="mt-1">
-                    {currentQty === 0 ? (
+                    {!isStoreOpen ? (
+                      <div className="w-full py-2 bg-red-50 text-red-700 text-xs font-bold rounded-xl border border-red-200 flex items-center justify-center gap-1">
+                        <Lock className="w-3.5 h-3.5" />
+                        <span>مغلق</span>
+                      </div>
+                    ) : currentQty === 0 ? (
                       <button
                         onClick={() => onUpdateCartItem(product, 1)}
                         className="w-full py-2 px-3 bg-emerald-800 hover:bg-emerald-900 text-white rounded-xl text-xs font-black flex items-center justify-center gap-1.5 shadow-sm transition-all"

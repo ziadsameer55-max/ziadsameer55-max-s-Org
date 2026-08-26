@@ -34,8 +34,8 @@ interface CustomerCatalogProps {
 }
 
 export const CustomerCatalog: React.FC<CustomerCatalogProps> = ({
-  products,
-  categories,
+  products = [],
+  categories = [],
   settings,
   user,
   isStoreOpen,
@@ -43,7 +43,7 @@ export const CustomerCatalog: React.FC<CustomerCatalogProps> = ({
   onOpenReviewModal,
   onOpenLogin,
   onNavigateToTab,
-  cart,
+  cart = [],
   onUpdateCartItem,
   onSetCartItemQty,
 }) => {
@@ -58,12 +58,16 @@ export const CustomerCatalog: React.FC<CustomerCatalogProps> = ({
     }
   });
 
+  const safeProducts = Array.isArray(products) ? products : [];
+  const safeFavorites = Array.isArray(favorites) ? favorites : [];
+
   // Toggle favorite product
   const toggleFavorite = (productId: string) => {
     setFavorites((prev) => {
-      const updated = prev.includes(productId)
-        ? prev.filter((id) => id !== productId)
-        : [...prev, productId];
+      const safePrev = Array.isArray(prev) ? prev : [];
+      const updated = safePrev.includes(productId)
+        ? safePrev.filter((id) => id !== productId)
+        : [...safePrev, productId];
       try {
         localStorage.setItem('halim_favorites', JSON.stringify(updated));
       } catch (err) {
@@ -75,12 +79,12 @@ export const CustomerCatalog: React.FC<CustomerCatalogProps> = ({
 
   // Filter products based on search, category, view mode, and status
   const visibleProducts = useMemo(() => {
-    return products.filter((p) => {
+    return safeProducts.filter((p) => {
       // Don't show hidden products to customers
       if (p.status === 'hidden') return false;
 
       // Filter by favorites if in favorites mode
-      if (activeViewMode === 'favorites' && !favorites.includes(p.id)) {
+      if (activeViewMode === 'favorites' && !safeFavorites.includes(p.id)) {
         return false;
       }
 
@@ -92,15 +96,15 @@ export const CustomerCatalog: React.FC<CustomerCatalogProps> = ({
       // Instant search matching
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase().trim();
-        const matchName = p.name.toLowerCase().includes(q);
-        const matchCat = p.category.toLowerCase().includes(q);
+        const matchName = (p.name || '').toLowerCase().includes(q);
+        const matchCat = (p.category || '').toLowerCase().includes(q);
         const matchDesc = p.description ? p.description.toLowerCase().includes(q) : false;
         return matchName || matchCat || matchDesc;
       }
 
       return true;
     });
-  }, [products, searchQuery, selectedCategory, activeViewMode, favorites]);
+  }, [safeProducts, searchQuery, selectedCategory, activeViewMode, safeFavorites]);
 
   // Cart summary calculations
   const totalItemsCount = cart.length;
@@ -161,14 +165,14 @@ export const CustomerCatalog: React.FC<CustomerCatalogProps> = ({
                 : 'bg-white text-slate-700 hover:bg-slate-100 border border-gray-200'
             }`}
           >
-            الكل ({products.filter((p) => p.status !== 'hidden').length})
+            الكل ({safeProducts.filter((p) => p.status !== 'hidden').length})
           </button>
 
-          {categories.map((cat) => {
-            const count = products.filter(
+          {(categories || []).map((cat) => {
+            const count = safeProducts.filter(
               (p) => p.category === cat.name && p.status !== 'hidden'
             ).length;
-            if (count === 0 && products.length > 0) return null;
+            if (count === 0 && safeProducts.length > 0) return null;
 
             return (
               <button
@@ -258,7 +262,7 @@ export const CustomerCatalog: React.FC<CustomerCatalogProps> = ({
           {visibleProducts.map((product) => {
             const qtyInCart = getProductQty(product.id);
             const isFav = favorites.includes(product.id);
-            const isLocked = product.status === 'locked';
+            const isLocked = product.status === 'locked' || !isStoreOpen;
 
             return (
               <div

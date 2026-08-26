@@ -13,6 +13,7 @@ import {
   deleteSession,
   cleanupExpiredSessions,
   hashPassword,
+  validateStrongPassword,
   revokeAllUserSessions,
   logSecurityEvent,
   recordLoginAttempt,
@@ -36,18 +37,36 @@ import {
   FinancialSummary,
   DealOffer,
   OfferType,
+  AdminCustomerRecord,
 } from './src/types.js';
 
 async function startServer() {
   const app = express();
   const PORT = 3000;
 
-  app.use(express.json());
+  // Request body size limits
+  app.use(express.json({ limit: '2mb' }));
+
+  // Strict Direct Database & Config File Protection
+  app.use((req: Request, res: Response, next) => {
+    const lowerUrl = req.url.toLowerCase();
+    if (
+      lowerUrl.includes('.sqlite') ||
+      lowerUrl.includes('.db') ||
+      lowerUrl.includes('.env') ||
+      lowerUrl.startsWith('/data/') ||
+      lowerUrl.includes('..')
+    ) {
+      return res.status(403).json({ success: false, error: 'Access Denied (Protected Resource)' });
+    }
+    next();
+  });
 
   // Security Headers Middleware
   app.use((req: Request, res: Response, next) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+    res.setHeader('X-XSS-Protection', '1; mode=block');
     res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
     res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
     next();
@@ -90,28 +109,44 @@ async function startServer() {
       const user = getSessionUser(db, token);
       if (user) return user;
 
-      // Fallback for secure master admin token
-      if (token === 'halim_admin_master_token') {
-        const adminStmt = db.prepare(`SELECT * FROM users WHERE role = 'admin' LIMIT 1`);
-        if (adminStmt.step()) {
-          const row = adminStmt.getAsObject();
-          adminStmt.free();
-          return {
-            id: String(row.id),
-            username: String(row.username),
-            role: 'admin',
-            fullName: String(row.fullName),
-            phone: String(row.phone),
-            storeName: row.storeName ? String(row.storeName) : undefined,
-            address: row.address ? String(row.address) : undefined,
-          };
-        }
-        adminStmt.free();
-      }
-
       return null;
     } catch {
       return null;
+    }
+  };
+
+  // ==========================================
+  // DEDICATED SECURITY & ISOLATION MIDDLEWARES
+  // ==========================================
+
+  // Middleware: Brute-Force Rate Limiting for Auth Endpoints
+  const authRateLimiter = async (req: Request, res: Response, next: () => void) => {
+    try {
+      const db = await getDb();
+      const ip = getClientIp(req);
+      const identifier = String(req.body?.username || req.body?.phone || req.body?.identifier || '').trim();
+
+      const lockout = checkLoginLockout(db, identifier, ip);
+      if (lockout.isLocked) {
+        logSecurityEvent(
+          db,
+          'LOGIN_LOCKOUT_TRIGGERED',
+          undefined,
+          identifier,
+          ip,
+          `Rate limit triggered: locked for ${lockout.remainingMinutes} min`
+        );
+        res.setHeader('Retry-After', String(lockout.remainingMinutes * 60));
+        return res.status(429).json({
+          success: false,
+          error: `تم إيقاف محاولات الدخول مؤقتاً لحماية الحساب. يرجى المحاولة بعد ${lockout.remainingMinutes} دقيقة`,
+          message: `تم إيقاف محاولات الدخول مؤقتاً لحماية الحساب. يرجى المحاولة بعد ${lockout.remainingMinutes} دقيقة`,
+          remainingMinutes: lockout.remainingMinutes,
+        });
+      }
+      next();
+    } catch (e) {
+      next();
     }
   };
 
@@ -144,11 +179,188 @@ async function startServer() {
     next();
   };
 
+  // Middleware: Strict Customer Isolation for Account/Debt/Statement APIs (Anti-IDOR)
+  const requireCustomerIsolation = (idParamName = 'id') => {
+    return async (req: Request, res: Response, next: () => void) => {
+      try {
+        const user = await getAuthUser(req);
+        if (!user) {
+          return res.status(401).json({
+            success: false,
+            error: 'يرجى تسجيل الدخول للوصول إلى بيانات الحساب',
+          });
+        }
+        (req as any).user = user;
+
+        // Admin has full authorized access to customer statements and records
+        if (user.role === 'admin') {
+          return next();
+        }
+
+        // Customer Role: Must strictly match their own customer ID or phone
+        const requestedTarget = String(req.params[idParamName] || req.query[idParamName] || req.body[idParamName] || '').trim();
+        if (requestedTarget && requestedTarget !== user.id && requestedTarget !== user.phone) {
+          const db = await getDb();
+          const ip = getClientIp(req);
+          logSecurityEvent(
+            db,
+            'IDOR_ATTEMPT_BLOCKED',
+            user.id,
+            user.username,
+            ip,
+            `Customer ${user.id} attempted to access data for ${requestedTarget} on ${req.path}`
+          );
+          return res.status(403).json({
+            success: false,
+            error: 'غير مصرح لك بالاطلاع على أو تعديل بيانات وحسابات عميل آخر (حماية عزل الحسابات)',
+          });
+        }
+
+        next();
+      } catch (err: any) {
+        return res.status(500).json({ error: 'تعذر التحقق من صلاحيات الأمان' });
+      }
+    };
+  };
+
+  // Middleware: Session Verification & Customer Isolation for Orders and Invoices (Anti-IDOR)
+  const requireSessionForOrdersAndInvoices = async (req: Request, res: Response, next: () => void) => {
+    try {
+      const user = await getAuthUser(req);
+      if (!user) {
+        return res.status(401).json({
+          success: false,
+          error: 'يرجى تسجيل الدخول للوصول إلى بيانات الطلبات والفواتير',
+        });
+      }
+      (req as any).user = user;
+
+      // Admin has full authorized access across all customers
+      if (user.role === 'admin') {
+        return next();
+      }
+
+      // Customer Role: Check if an explicit customerId was requested in params, query, or body
+      const requestedCustomerId = String(
+        req.params.customerId || req.query.customerId || req.body.customerId || ''
+      ).trim();
+
+      if (requestedCustomerId && requestedCustomerId !== user.id && requestedCustomerId !== user.phone) {
+        const db = await getDb();
+        const ip = getClientIp(req);
+        logSecurityEvent(
+          db,
+          'IDOR_CUSTOMER_MISMATCH_BLOCKED',
+          user.id,
+          user.username,
+          ip,
+          `Customer ${user.id} requested unauthorized customerId=${requestedCustomerId} on ${req.method} ${req.path}`
+        );
+        return res.status(403).json({
+          success: false,
+          error: 'غير مصرح لك بالوصول إلى بيانات أو فواتير عميل آخر (حماية عزل الجلسة)',
+        });
+      }
+
+      next();
+    } catch (err: any) {
+      return res.status(500).json({ error: 'تعذر التحقق من جلسة المستخدم' });
+    }
+  };
+
+  // Middleware: Strict Order Ownership Isolation for Single Order Details (Anti-IDOR)
+  const requireOrderOwnerOrAdmin = async (req: Request, res: Response, next: () => void) => {
+    try {
+      const user = await getAuthUser(req);
+      if (!user) {
+        return res.status(401).json({ error: 'يرجى تسجيل الدخول للوصول إلى تفاصيل الطلب' });
+      }
+      (req as any).user = user;
+      if (user.role === 'admin') {
+        return next();
+      }
+
+      const id = req.params.id || req.params.orderId;
+      const db = await getDb();
+      const stmt = db.prepare('SELECT customerId, customerPhone FROM orders WHERE id = ? OR orderNumber = ?');
+      stmt.bind([id, id]);
+      if (!stmt.step()) {
+        stmt.free();
+        return res.status(404).json({ error: 'الطلب غير موجود' });
+      }
+      const ordRow = stmt.getAsObject();
+      stmt.free();
+
+      if (String(ordRow.customerId) !== user.id && String(ordRow.customerPhone) !== user.phone) {
+        const ip = getClientIp(req);
+        logSecurityEvent(
+          db,
+          'IDOR_ORDER_ACCESS_BLOCKED',
+          user.id,
+          user.username,
+          ip,
+          `Customer ${user.id} attempted to access order ${id} of customer ${ordRow.customerId}`
+        );
+        return res.status(403).json({
+          error: 'غير مصرح لك بالاطلاع على تفاصيل طلبات عميل آخر',
+        });
+      }
+
+      next();
+    } catch (err: any) {
+      return res.status(500).json({ error: 'تعذر التحقق من ملكية الطلب' });
+    }
+  };
+
+  // Middleware: Strict Invoice Ownership Isolation for Single Invoice Details (Anti-IDOR)
+  const requireInvoiceOwnerOrAdmin = async (req: Request, res: Response, next: () => void) => {
+    try {
+      const user = await getAuthUser(req);
+      if (!user) {
+        return res.status(401).json({ error: 'يرجى تسجيل الدخول للوصول إلى تفاصيل الفاتورة' });
+      }
+      (req as any).user = user;
+      if (user.role === 'admin') {
+        return next();
+      }
+
+      const id = req.params.id || req.params.invoiceId || req.params.orderId;
+      const db = await getDb();
+      const stmt = db.prepare('SELECT customerId, customerPhone FROM orders WHERE id = ? OR orderNumber = ?');
+      stmt.bind([id, id]);
+      if (!stmt.step()) {
+        stmt.free();
+        return res.status(404).json({ error: 'الفاتورة المطلوبة غير موجودة' });
+      }
+      const ordRow = stmt.getAsObject();
+      stmt.free();
+
+      if (String(ordRow.customerId) !== user.id && String(ordRow.customerPhone) !== user.phone) {
+        const ip = getClientIp(req);
+        logSecurityEvent(
+          db,
+          'IDOR_INVOICE_ACCESS_BLOCKED',
+          user.id,
+          user.username,
+          ip,
+          `Customer ${user.id} attempted to access invoice ${id} of customer ${ordRow.customerId}`
+        );
+        return res.status(403).json({
+          error: 'غير مصرح لك بالاطلاع على فواتير عميل آخر',
+        });
+      }
+
+      next();
+    } catch (err: any) {
+      return res.status(500).json({ error: 'تعذر التحقق من ملكية الفاتورة' });
+    }
+  };
+
   // ==========================================
   // 1. AUTHENTICATION & ACCOUNT ENDPOINTS
   // ==========================================
 
-  app.post('/api/auth/login', async (req: Request, res: Response) => {
+  app.post('/api/auth/login', authRateLimiter, async (req: Request, res: Response) => {
     try {
       const { username, password, rememberMe } = req.body;
       const ip = getClientIp(req);
@@ -174,18 +386,25 @@ async function startServer() {
       }
 
       const stmt = db.prepare(
-        'SELECT * FROM users WHERE username = ? OR phone = ?'
+        'SELECT * FROM users WHERE LOWER(username) = LOWER(?) OR username = ? OR phone = ?'
       );
-      stmt.bind([cleanUsername, cleanUsername]);
+      stmt.bind([cleanUsername, cleanUsername, cleanUsername]);
 
       if (stmt.step()) {
         const row = stmt.getAsObject();
         stmt.free();
 
         const storedPasswordHash = String(row.password || '');
-        const isValid = verifyPassword(String(password), storedPasswordHash);
+        const isValid = await verifyPassword(String(password), storedPasswordHash);
 
         if (isValid) {
+          if (row.status === 'disabled') {
+            return res.status(403).json({
+              success: false,
+              message: 'تم تعطيل هذا الحساب من قبل الإدارة. يرجى التواصل مع الدعم الفني لتفعيل الحساب.',
+            });
+          }
+
           // Clear previous failed attempts
           clearLoginAttempts(db, cleanUsername, ip);
           recordLoginAttempt(db, cleanUsername, ip, true);
@@ -198,6 +417,7 @@ async function startServer() {
             role: row.role as any,
             storeName: row.storeName ? String(row.storeName) : undefined,
             address: row.address ? String(row.address) : undefined,
+            status: (row.status as any) || 'active',
             createdAt: row.createdAt ? String(row.createdAt) : undefined,
           };
 
@@ -314,7 +534,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/auth/register', async (req: Request, res: Response) => {
+  app.post('/api/auth/register', authRateLimiter, async (req: Request, res: Response) => {
     try {
       const { fullName, phone, storeName, address, password, confirmPassword, rememberMe } = req.body;
       const ip = getClientIp(req);
@@ -333,8 +553,9 @@ async function startServer() {
         return res.status(400).json({ success: false, error: 'يرجى إدخال رقم هاتف محمول صالح (11 رقم)' });
       }
 
-      if (!password || typeof password !== 'string' || password.length < 6) {
-        return res.status(400).json({ success: false, error: 'كلمة المرور يجب أن لا تقل عن 6 خانات' });
+      const pwValidation = validateStrongPassword(password);
+      if (!pwValidation.valid) {
+        return res.status(400).json({ success: false, error: pwValidation.message || 'كلمة المرور لا تلبي معايير الأمان' });
       }
 
       if (confirmPassword !== undefined && password !== confirmPassword) {
@@ -355,13 +576,16 @@ async function startServer() {
       }
       checkStmt.free();
 
-      const newUserId = 'usr-cust-' + Date.now();
-      const hashedPassword = hashPassword(String(password));
+      const countRes = db.exec(`SELECT COUNT(*) FROM users WHERE role = 'customer'`);
+      const currentCustCount = (countRes[0]?.values[0]?.[0] as number) || 0;
+      const nextCustNum = 1001 + currentCustCount;
+      const newUserId = `Customer ${nextCustNum}`;
+      const hashedPassword = await hashPassword(String(password));
       const nowIso = new Date().toISOString();
 
       // STRICT ADMIN/CUSTOMER SEPARATION: Role is hardcoded to 'customer', client role is completely ignored
       db.run(
-        `INSERT INTO users (id, username, password, fullName, phone, role, storeName, address, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO users (id, username, password, fullName, phone, role, storeName, address, createdAt, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           newUserId,
           cleanPhone,
@@ -372,6 +596,7 @@ async function startServer() {
           storeName ? String(storeName).trim() : 'محل تجاري',
           address ? String(address).trim() : 'محافظة الإسكندرية',
           nowIso,
+          'active',
         ]
       );
       saveDb();
@@ -384,6 +609,7 @@ async function startServer() {
         role: 'customer',
         storeName: storeName ? String(storeName).trim() : 'محل تجاري',
         address: address ? String(address).trim() : 'محافظة الإسكندرية',
+        status: 'active',
         createdAt: nowIso,
       };
 
@@ -403,7 +629,7 @@ async function startServer() {
   });
 
   // Password Reset Request ("نسيت كلمة المرور؟")
-  app.post('/api/auth/forgot-password', async (req: Request, res: Response) => {
+  app.post('/api/auth/forgot-password', authRateLimiter, async (req: Request, res: Response) => {
     try {
       const { phone } = req.body;
       const ip = getClientIp(req);
@@ -443,7 +669,7 @@ async function startServer() {
   });
 
   // Reset Password Execution
-  app.post('/api/auth/reset-password', async (req: Request, res: Response) => {
+  app.post('/api/auth/reset-password', authRateLimiter, async (req: Request, res: Response) => {
     try {
       const { phone, token, newPassword, confirmPassword } = req.body;
       const ip = getClientIp(req);
@@ -452,8 +678,9 @@ async function startServer() {
         return res.status(400).json({ success: false, error: 'يرجى استكمال جميع الحقول المطلوبة' });
       }
 
-      if (typeof newPassword !== 'string' || newPassword.length < 6) {
-        return res.status(400).json({ success: false, error: 'كلمة المرور الجديدة يجب ألا تقل عن 6 خانات' });
+      const pwValidation = validateStrongPassword(newPassword);
+      if (!pwValidation.valid) {
+        return res.status(400).json({ success: false, error: pwValidation.message || 'كلمة المرور الجديدة لا تلبي معايير الأمان' });
       }
 
       if (confirmPassword !== undefined && newPassword !== confirmPassword) {
@@ -469,7 +696,7 @@ async function startServer() {
         return res.status(400).json({ success: false, error: 'رمز استعادة الحساب غير صحيح أو منتهي الصلاحية' });
       }
 
-      const hashedPassword = hashPassword(newPassword);
+      const hashedPassword = await hashPassword(newPassword);
       db.run('UPDATE users SET password = ? WHERE id = ?', [hashedPassword, verification.userId]);
 
       // Invalidate all old sessions for this user
@@ -498,8 +725,9 @@ async function startServer() {
         return res.status(400).json({ success: false, error: 'يرجى إدخال كلمة المرور الحالية والجديدة' });
       }
 
-      if (typeof newPassword !== 'string' || newPassword.length < 6) {
-        return res.status(400).json({ success: false, error: 'كلمة المرور الجديدة يجب ألا تقل عن 6 خانات' });
+      const pwValidation = validateStrongPassword(newPassword);
+      if (!pwValidation.valid) {
+        return res.status(400).json({ success: false, error: pwValidation.message || 'كلمة المرور الجديدة لا تلبي معايير الأمان' });
       }
 
       if (confirmPassword !== undefined && newPassword !== confirmPassword) {
@@ -515,14 +743,14 @@ async function startServer() {
         stmt.free();
 
         const storedPasswordHash = String(row.password || '');
-        const isCurrentValid = verifyPassword(String(currentPassword), storedPasswordHash);
+        const isCurrentValid = await verifyPassword(String(currentPassword), storedPasswordHash);
 
         if (!isCurrentValid) {
           logSecurityEvent(db, 'PASSWORD_CHANGE_FAILED', user.id, user.username, ip, 'Incorrect current password');
           return res.status(400).json({ success: false, error: 'كلمة المرور الحالية غير صحيحة' });
         }
 
-        const hashedNewPassword = hashPassword(newPassword);
+        const hashedNewPassword = await hashPassword(newPassword);
         db.run('UPDATE users SET password = ? WHERE id = ?', [hashedNewPassword, user.id]);
 
         // Revoke all previous sessions and create a fresh one
@@ -669,6 +897,22 @@ async function startServer() {
   });
 
   app.post('/api/settings', requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const db = await getDb();
+      const current = (await getSystemConfig(db)) || ({} as any);
+      const newSettings: SystemSettings = { ...current, ...req.body };
+      db.run('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)', [
+        'system_config',
+        JSON.stringify(newSettings),
+      ]);
+      saveDb();
+      res.json({ success: true, settings: newSettings });
+    } catch (err: any) {
+      res.status(500).json({ error: 'تعذر حفظ إعدادات النظام' });
+    }
+  });
+
+  app.put('/api/settings', requireAdmin, async (req: Request, res: Response) => {
     try {
       const db = await getDb();
       const current = (await getSystemConfig(db)) || ({} as any);
@@ -1404,10 +1648,10 @@ async function startServer() {
     return 0;
   }
 
-  // GET Orders with Customer Isolation
-  app.get('/api/orders', async (req: Request, res: Response) => {
+  // GET Orders with Customer Isolation & Session Middleware
+  app.get('/api/orders', requireSessionForOrdersAndInvoices, async (req: Request, res: Response) => {
     try {
-      const authUser = await getAuthUser(req);
+      const authUser = (req as any).user || (await getAuthUser(req));
       const isAdmin = authUser?.role === 'admin';
       const db = await getDb();
       const sysSettings = await getSystemConfig(db);
@@ -1416,15 +1660,7 @@ async function startServer() {
       let sql = 'SELECT * FROM orders';
       const params: any[] = [];
 
-      if (!authUser) {
-        // Unauthenticated access: allow querying only if specific phone is provided
-        const phone = req.query.phone ? String(req.query.phone).trim() : '';
-        if (!phone) {
-          return res.json([]);
-        }
-        sql += ' WHERE customerPhone = ?';
-        params.push(phone);
-      } else if (isAdmin) {
+      if (isAdmin) {
         // Admin can filter by customerId or view all
         const { customerId, phone } = req.query;
         if (customerId) {
@@ -1435,8 +1671,8 @@ async function startServer() {
           params.push(phone);
         }
       } else {
-        // Customer Role: STRICT ISOLATION -> Only their own orders
-        sql += ' WHERE customerId = ? OR customerPhone = ?';
+        // Customer Role: STRICT ISOLATION -> Only their own orders with Session customer ID
+        sql += ' WHERE (customerId = ? OR customerPhone = ?)';
         params.push(authUser.id, authUser.phone);
       }
 
@@ -1524,33 +1760,35 @@ async function startServer() {
     }
   });
 
-  // GET Single Order with Authorization Check
-  app.get('/api/orders/:id', async (req: Request, res: Response) => {
+  // GET Single Order with Authorization Check & Customer Isolation
+  app.get('/api/orders/:id', requireOrderOwnerOrAdmin, async (req: Request, res: Response) => {
     try {
       const { id } = req.params;
-      const authUser = await getAuthUser(req);
+      const authUser = (req as any).user || (await getAuthUser(req));
       const isAdmin = authUser?.role === 'admin';
       const db = await getDb();
       const sysSettings = await getSystemConfig(db);
       const shouldHidePrices = !isAdmin && Boolean(sysSettings?.hidePrices);
 
-      const stmt = db.prepare('SELECT * FROM orders WHERE id = ? OR orderNumber = ?');
-      stmt.bind([id, id]);
+      let sql = 'SELECT * FROM orders WHERE (id = ? OR orderNumber = ?)';
+      const params: any[] = [id, id];
+
+      // Enforce SQL-level customer isolation directly in database query (WHERE customerId = current_session.customer_id)
+      if (authUser && authUser.role === 'customer') {
+        sql += ' AND (customerId = ? OR customerPhone = ?)';
+        params.push(authUser.id, authUser.phone);
+      }
+
+      const stmt = db.prepare(sql);
+      stmt.bind(params);
 
       if (!stmt.step()) {
         stmt.free();
-        return res.status(404).json({ error: 'الطلب غير موجود' });
+        return res.status(404).json({ error: 'الطلب غير موجود أو غير مصرح لك بالوصول إليه' });
       }
 
       const row = stmt.getAsObject();
       stmt.free();
-
-      // Authorization check: Admin or matching Customer
-      if (authUser && authUser.role === 'customer') {
-        if (row.customerId !== authUser.id && row.customerPhone !== authUser.phone) {
-          return res.status(403).json({ error: 'غير مصرح لك بالاطلاع على تفاصيل طلبات عميل آخر' });
-        }
-      }
 
       const rawGrandTotal = Number(row.grandTotal);
       const rawPaidAmount = Number(row.paidAmount || 0);
@@ -1620,6 +1858,324 @@ async function startServer() {
       res.json(order);
     } catch (err: any) {
       res.status(500).json({ error: 'تعذر جلب تفاصيل الطلب' });
+    }
+  });
+
+  // ==========================================
+  // INVOICE ENDPOINTS (Protected with Session Middleware & Anti-IDOR WHERE customer_id clause)
+  // ==========================================
+
+  // GET Invoices List (Protected with requireSessionForOrdersAndInvoices)
+  app.get('/api/invoices', requireSessionForOrdersAndInvoices, async (req: Request, res: Response) => {
+    try {
+      const authUser = (req as any).user || (await getAuthUser(req));
+      const isAdmin = authUser?.role === 'admin';
+      const db = await getDb();
+      const sysSettings = await getSystemConfig(db);
+      const shouldHidePrices = !isAdmin && Boolean(sysSettings?.hidePrices);
+
+      let sql = 'SELECT * FROM orders WHERE status != "Cancelled"';
+      const params: any[] = [];
+
+      if (isAdmin) {
+        const { customerId, phone } = req.query;
+        if (customerId) {
+          sql += ' AND customerId = ?';
+          params.push(customerId);
+        } else if (phone) {
+          sql += ' AND customerPhone = ?';
+          params.push(phone);
+        }
+      } else {
+        // Customer Role: Strictly isolate to current session's customerId
+        sql += ' AND (customerId = ? OR customerPhone = ?)';
+        params.push(authUser.id, authUser.phone);
+      }
+
+      sql += ' ORDER BY createdAt DESC';
+
+      const resStmt = db.exec(sql, params);
+      const invoices: any[] = [];
+
+      if (resStmt.length > 0 && resStmt[0].values) {
+        for (const row of resStmt[0].values) {
+          const orderId = String(row[0]);
+          const orderNumber = String(row[1]);
+          const customerId = String(row[2]);
+          const customerName = String(row[3]);
+          const customerPhone = String(row[4]);
+          const customerAddress = row[5] ? String(row[5]) : undefined;
+          const salesRep = String(row[6]);
+          const status = row[7] as OrderStatus;
+          const createdAt = String(row[8]);
+          const rawGrandTotal = Number(row[14]);
+          const rawPaidAmount = row[15] !== null && row[15] !== undefined ? Number(row[15]) : 0;
+          const grandTotal = shouldHidePrices ? 0 : rawGrandTotal;
+          const paidAmount = shouldHidePrices ? 0 : rawPaidAmount;
+          const remainingBalance = shouldHidePrices
+            ? 0
+            : (row[16] !== null && row[16] !== undefined
+              ? Number(row[16])
+              : Math.max(0, rawGrandTotal - rawPaidAmount));
+          const paymentStatus =
+            (row[17] as any) ||
+            (rawPaidAmount >= rawGrandTotal ? 'Paid' : rawPaidAmount > 0 ? 'Partial' : 'Unpaid');
+
+          // Real-time previous customer debt calculation
+          const prevDebt = calculateCustomerPreviousDebt(db, customerId, customerPhone, orderId);
+          const currInvoice = grandTotal;
+          const totalDue = shouldHidePrices ? 0 : prevDebt + currInvoice;
+          const finalRemaining = shouldHidePrices ? 0 : Math.max(0, totalDue - paidAmount);
+
+          // Get items
+          const itemsRes = db.exec('SELECT * FROM order_items WHERE orderId = ?', [orderId]);
+          const items = itemsRes.length > 0 && itemsRes[0].values
+            ? itemsRes[0].values.map((iRow) => ({
+                id: String(iRow[0]),
+                productId: String(iRow[2]),
+                productName: String(iRow[3]),
+                unitPrice: shouldHidePrices ? 0 : Number(iRow[4]),
+                quantity: Number(iRow[5]),
+                unit: String(iRow[6]),
+                discount: shouldHidePrices ? 0 : Number(iRow[7]),
+                totalPrice: shouldHidePrices ? 0 : Number(iRow[8]),
+              }))
+            : [];
+
+          invoices.push({
+            id: orderId,
+            invoiceNumber: 'INV-' + orderNumber.replace('#', ''),
+            orderId,
+            orderNumber,
+            customerId,
+            customerName,
+            customerPhone,
+            customerAddress,
+            salesRep,
+            status,
+            createdAt,
+            itemsCount: Number(row[10]),
+            totalQuantity: Number(row[11]),
+            subtotal: shouldHidePrices ? 0 : Number(row[12]),
+            discount: shouldHidePrices ? 0 : Number(row[13]),
+            grandTotal,
+            paidAmount,
+            remainingBalance,
+            previousDebt: shouldHidePrices ? 0 : prevDebt,
+            currentInvoice: currInvoice,
+            totalDueWithDebt: totalDue,
+            finalRemainingWithDebt: finalRemaining,
+            paymentStatus,
+            items,
+          });
+        }
+      }
+
+      res.json(invoices);
+    } catch (err: any) {
+      res.status(500).json({ error: 'تعذر جلب قائمة الفواتير' });
+    }
+  });
+
+  // GET Single Invoice (Protected with requireInvoiceOwnerOrAdmin)
+  app.get('/api/invoices/:id', requireInvoiceOwnerOrAdmin, async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const authUser = (req as any).user || (await getAuthUser(req));
+      const isAdmin = authUser?.role === 'admin';
+      const db = await getDb();
+      const sysSettings = await getSystemConfig(db);
+      const shouldHidePrices = !isAdmin && Boolean(sysSettings?.hidePrices);
+
+      let sql = 'SELECT * FROM orders WHERE (id = ? OR orderNumber = ?)';
+      const params: any[] = [id, id];
+
+      // Enforce SQL-level customer isolation directly in database query
+      if (authUser && authUser.role === 'customer') {
+        sql += ' AND (customerId = ? OR customerPhone = ?)';
+        params.push(authUser.id, authUser.phone);
+      }
+
+      const stmt = db.prepare(sql);
+      stmt.bind(params);
+
+      if (!stmt.step()) {
+        stmt.free();
+        return res.status(404).json({ error: 'الفاتورة غير موجودة أو غير مصرح لك بالوصول إليها' });
+      }
+
+      const row = stmt.getAsObject();
+      stmt.free();
+
+      const rawGrandTotal = Number(row.grandTotal);
+      const rawPaidAmount = Number(row.paidAmount || 0);
+      const grandTotal = shouldHidePrices ? 0 : rawGrandTotal;
+      const paidAmount = shouldHidePrices ? 0 : rawPaidAmount;
+      const remainingBalance = shouldHidePrices
+        ? 0
+        : (row.remainingBalance !== null && row.remainingBalance !== undefined
+          ? Number(row.remainingBalance)
+          : Math.max(0, rawGrandTotal - rawPaidAmount));
+      const paymentStatus =
+        (row.paymentStatus as any) ||
+        (rawPaidAmount >= rawGrandTotal ? 'Paid' : rawPaidAmount > 0 ? 'Partial' : 'Unpaid');
+
+      const itemsRes = db.exec('SELECT * FROM order_items WHERE orderId = ?', [String(row.id)]);
+      const items: any[] = [];
+      if (itemsRes.length > 0 && itemsRes[0].values) {
+        for (const iRow of itemsRes[0].values) {
+          items.push({
+            id: String(iRow[0]),
+            orderId: String(iRow[1]),
+            productId: String(iRow[2]),
+            productName: String(iRow[3]),
+            unitPrice: shouldHidePrices ? 0 : Number(iRow[4]),
+            quantity: Number(iRow[5]),
+            unit: String(iRow[6]),
+            discount: shouldHidePrices ? 0 : Number(iRow[7]),
+            totalPrice: shouldHidePrices ? 0 : Number(iRow[8]),
+          });
+        }
+      }
+
+      // Payments history for this order/invoice
+      const payRes = db.exec('SELECT * FROM payments WHERE orderId = ? OR orderNumber = ? ORDER BY createdAt DESC', [String(row.id), String(row.orderNumber)]);
+      const payments: any[] = [];
+      if (payRes.length > 0 && payRes[0].values) {
+        for (const pRow of payRes[0].values) {
+          payments.push({
+            id: String(pRow[0]),
+            amount: Number(pRow[6]),
+            paymentDate: String(pRow[7]),
+            paymentMethod: String(pRow[8]),
+            collectedBy: String(pRow[9]),
+            notes: pRow[10] ? String(pRow[10]) : undefined,
+          });
+        }
+      }
+
+      // Server-Side Debt Calculations
+      const prevDebt = calculateCustomerPreviousDebt(db, String(row.customerId), String(row.customerPhone), String(row.id));
+      const currInvoice = grandTotal;
+      const totalDue = shouldHidePrices ? 0 : prevDebt + currInvoice;
+      const finalRemaining = shouldHidePrices ? 0 : Math.max(0, totalDue - paidAmount);
+
+      const invoice = {
+        id: String(row.id),
+        invoiceNumber: 'INV-' + String(row.orderNumber).replace('#', ''),
+        orderId: String(row.id),
+        orderNumber: String(row.orderNumber),
+        customerId: String(row.customerId),
+        customerName: String(row.customerName),
+        customerPhone: String(row.customerPhone),
+        customerAddress: row.customerAddress ? String(row.customerAddress) : undefined,
+        salesRep: String(row.salesRep),
+        status: row.status as OrderStatus,
+        createdAt: String(row.createdAt),
+        updatedAt: String(row.updatedAt),
+        itemsCount: Number(row.itemsCount),
+        totalQuantity: Number(row.totalQuantity),
+        subtotal: shouldHidePrices ? 0 : Number(row.subtotal),
+        discount: shouldHidePrices ? 0 : Number(row.discount || 0),
+        grandTotal,
+        paidAmount,
+        remainingBalance,
+        previousDebt: shouldHidePrices ? 0 : prevDebt,
+        currentInvoice: currInvoice,
+        totalDueWithDebt: totalDue,
+        finalRemainingWithDebt: finalRemaining,
+        paymentStatus,
+        notes: row.notes ? String(row.notes) : undefined,
+        items,
+        payments,
+      };
+
+      res.json(invoice);
+    } catch (err: any) {
+      res.status(500).json({ error: 'تعذر جلب تفاصيل الفاتورة' });
+    }
+  });
+
+  // GET Invoices by Customer (Protected with requireSessionForOrdersAndInvoices)
+  app.get('/api/invoices/customer/:customerId', requireSessionForOrdersAndInvoices, async (req: Request, res: Response) => {
+    try {
+      const { customerId } = req.params;
+      const authUser = (req as any).user || (await getAuthUser(req));
+      const isAdmin = authUser?.role === 'admin';
+      const db = await getDb();
+      const sysSettings = await getSystemConfig(db);
+      const shouldHidePrices = !isAdmin && Boolean(sysSettings?.hidePrices);
+
+      // Customer isolation check: Customer can ONLY query their own customerId
+      if (authUser && authUser.role === 'customer') {
+        if (customerId !== authUser.id && customerId !== authUser.phone) {
+          return res.status(403).json({
+            success: false,
+            error: 'غير مصرح لك بالاطلاع على فواتير عميل آخر',
+          });
+        }
+      }
+
+      const targetCustomerId = authUser && authUser.role === 'customer' ? authUser.id : customerId;
+      const targetCustomerPhone = authUser && authUser.role === 'customer' ? authUser.phone : customerId;
+
+      const sql = 'SELECT * FROM orders WHERE (customerId = ? OR customerPhone = ?) AND status != "Cancelled" ORDER BY createdAt DESC';
+      const resStmt = db.exec(sql, [targetCustomerId, targetCustomerPhone]);
+      const invoices: any[] = [];
+
+      if (resStmt.length > 0 && resStmt[0].values) {
+        for (const row of resStmt[0].values) {
+          const orderId = String(row[0]);
+          const orderNumber = String(row[1]);
+          const rawGrandTotal = Number(row[14]);
+          const rawPaidAmount = row[15] !== null && row[15] !== undefined ? Number(row[15]) : 0;
+          const grandTotal = shouldHidePrices ? 0 : rawGrandTotal;
+          const paidAmount = shouldHidePrices ? 0 : rawPaidAmount;
+          const remainingBalance = shouldHidePrices
+            ? 0
+            : (row[16] !== null && row[16] !== undefined
+              ? Number(row[16])
+              : Math.max(0, rawGrandTotal - rawPaidAmount));
+          const paymentStatus =
+            (row[17] as any) ||
+            (rawPaidAmount >= rawGrandTotal ? 'Paid' : rawPaidAmount > 0 ? 'Partial' : 'Unpaid');
+
+          const prevDebt = calculateCustomerPreviousDebt(db, String(row[2]), String(row[4]), orderId);
+          const currInvoice = grandTotal;
+          const totalDue = shouldHidePrices ? 0 : prevDebt + currInvoice;
+          const finalRemaining = shouldHidePrices ? 0 : Math.max(0, totalDue - paidAmount);
+
+          invoices.push({
+            id: orderId,
+            invoiceNumber: 'INV-' + orderNumber.replace('#', ''),
+            orderId,
+            orderNumber,
+            customerId: String(row[2]),
+            customerName: String(row[3]),
+            customerPhone: String(row[4]),
+            customerAddress: row[5] ? String(row[5]) : undefined,
+            salesRep: String(row[6]),
+            status: row[7] as OrderStatus,
+            createdAt: String(row[8]),
+            itemsCount: Number(row[10]),
+            totalQuantity: Number(row[11]),
+            subtotal: shouldHidePrices ? 0 : Number(row[12]),
+            discount: shouldHidePrices ? 0 : Number(row[13]),
+            grandTotal,
+            paidAmount,
+            remainingBalance,
+            previousDebt: shouldHidePrices ? 0 : prevDebt,
+            currentInvoice: currInvoice,
+            totalDueWithDebt: totalDue,
+            finalRemainingWithDebt: finalRemaining,
+            paymentStatus,
+          });
+        }
+      }
+
+      res.json(invoices);
+    } catch (err: any) {
+      res.status(500).json({ error: 'تعذر جلب فواتير العميل' });
     }
   });
 
@@ -1762,24 +2318,75 @@ async function startServer() {
       const sysSettings = await getSystemConfig(db);
       const shouldHidePrices = !isAdmin && Boolean(sysSettings?.hidePrices);
 
-      // Check system ordering open status
-      if (sysSettings) {
+      // Check system ordering open status strictly on the server (Prevents any bypass)
+      if (sysSettings && !isAdmin) {
+        // 1. Manual Override check
         if (sysSettings.isManualOverrideActive && !sysSettings.manualOrdersOpen) {
           return res.status(400).json({
-            error: 'استقبال الطلبات مغلق حالياً بقرار من الإدارة 🔒',
+            error: 'عذرًا، تم إغلاق استقبال الطلبات حاليًا بقرار من الإدارة. يرجى المحاولة مرة أخرى لاحقًا.',
+            storeClosed: true,
+            code: 'STORE_CLOSED',
           });
+        }
+
+        // 2. Automated Schedule check (if schedule is active and manual override is not forced)
+        if (!sysSettings.isManualOverrideActive && sysSettings.scheduleEnabled && Array.isArray(sysSettings.weeklySchedule) && sysSettings.weeklySchedule.length > 0) {
+          const dayNames: Record<number, string> = { 0: 'sun', 1: 'mon', 2: 'tue', 3: 'wed', 4: 'thu', 5: 'fri', 6: 'sat' };
+          const now = new Date();
+          const currentDayKey = dayNames[now.getDay()];
+          const dayConfig = sysSettings.weeklySchedule.find((d: any) => d.dayKey === currentDayKey);
+
+          if (!dayConfig || !dayConfig.isOpen) {
+            return res.status(400).json({
+              error: 'عذرًا، تم إغلاق استقبال الطلبات اليوم وفقًا لمواعيد العمل الرسمية.',
+              storeClosed: true,
+              code: 'STORE_CLOSED',
+            });
+          }
+
+          const currentMinutes = now.getHours() * 60 + now.getMinutes();
+          const [oH, oM] = (dayConfig.openTime || '08:00').split(':').map(Number);
+          const [cH, cM] = (dayConfig.closeTime || '22:00').split(':').map(Number);
+          const openMinutes = (oH || 0) * 60 + (oM || 0);
+          const closeMinutes = (cH || 0) * 60 + (cM || 0);
+
+          if (currentMinutes < openMinutes || currentMinutes > closeMinutes) {
+            return res.status(400).json({
+              error: `عذرًا، تم إغلاق استقبال الطلبات حاليًا. مواعيد العمل اليوم من ${dayConfig.openTime} حتى ${dayConfig.closeTime}. يرجى المحاولة مرة أخرى لاحقًا.`,
+              storeClosed: true,
+              code: 'STORE_CLOSED',
+            });
+          }
         }
       }
 
-      // Determine customer details securely
-      let finalCustomerId = authUser?.id || (req.body.customerId ? String(req.body.customerId) : 'guest-' + Date.now());
-      let finalCustomerName = authUser
-        ? authUser.fullName + (authUser.storeName ? ` - ${authUser.storeName}` : '')
-        : (guestName || req.body.customerName || '').trim();
-      let finalCustomerPhone = authUser ? authUser.phone : (guestPhone || req.body.customerPhone || '').trim();
-      let finalCustomerAddress = authUser
-        ? authUser.address || 'الإسكندرية'
-        : (guestAddress || req.body.customerAddress || 'الإسكندرية').trim();
+      // Determine customer details securely based on authenticated session
+      let finalCustomerId = '';
+      let finalCustomerName = '';
+      let finalCustomerPhone = '';
+      let finalCustomerAddress = '';
+
+      if (authUser) {
+        if (authUser.role === 'admin') {
+          // Admin can create an order for a customer if specified
+          finalCustomerId = req.body.customerId ? String(req.body.customerId).trim() : authUser.id;
+          finalCustomerName = (req.body.customerName || authUser.fullName).trim();
+          finalCustomerPhone = (req.body.customerPhone || authUser.phone).trim();
+          finalCustomerAddress = (req.body.customerAddress || authUser.address || 'الإسكندرية').trim();
+        } else {
+          // Customer is strictly bound to their verified session identity (Anti-Spoofing)
+          finalCustomerId = authUser.id;
+          finalCustomerName = (authUser.fullName + (authUser.storeName ? ` - ${authUser.storeName}` : '')).trim();
+          finalCustomerPhone = authUser.phone.trim();
+          finalCustomerAddress = (authUser.address || 'الإسكندرية').trim();
+        }
+      } else {
+        // Unauthenticated guest order
+        finalCustomerId = 'guest-' + Date.now();
+        finalCustomerName = (guestName || req.body.customerName || '').trim();
+        finalCustomerPhone = (guestPhone || req.body.customerPhone || '').trim();
+        finalCustomerAddress = (guestAddress || req.body.customerAddress || 'الإسكندرية').trim();
+      }
 
       if (!finalCustomerName || !finalCustomerPhone) {
         return res.status(400).json({ error: 'يرجى تقديم الاسم ورقم الهاتف لإتمام الطلب' });
@@ -2024,12 +2631,14 @@ async function startServer() {
       const { items, discount, status, notes, adminNotes, salesRep, performedBy } = req.body;
       const db = await getDb();
 
-      const ordCheck = db.exec('SELECT grandTotal, paidAmount FROM orders WHERE id = ?', [id]);
+      const ordCheck = db.exec('SELECT grandTotal, paidAmount, status FROM orders WHERE id = ?', [id]);
       if (ordCheck.length === 0 || !ordCheck[0].values || ordCheck[0].values.length === 0) {
         return res.status(404).json({ error: 'الطلب غير موجود' });
       }
 
       const currentPaid = Number(ordCheck[0].values[0][1] || 0);
+      const currentStatus = String(ordCheck[0].values[0][2] || 'Confirmed');
+      const finalStatus = status || currentStatus;
       const nowStr = new Date().toLocaleString('ar-EG', {
         dateStyle: 'short',
         timeStyle: 'short',
@@ -2047,7 +2656,7 @@ async function startServer() {
         subtotal += itemTot;
         totalQty += Number(item.quantity);
 
-        const itemId = item.id || 'item_' + Math.random().toString(36).substring(2, 9);
+        const itemId = 'item_' + Date.now() + '_' + Math.random().toString(36).substring(2, 9);
         db.run(
           `INSERT INTO order_items (id, orderId, productId, productName, unitPrice, quantity, unit, discount, totalPrice) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [
@@ -2079,7 +2688,7 @@ async function startServer() {
           grandTotal,
           newRemaining,
           newPaymentStatus,
-          status,
+          finalStatus,
           notes || '',
           adminNotes || '',
           salesRep || 'محمد فوزي',
@@ -2104,7 +2713,8 @@ async function startServer() {
       saveDb();
       res.json({ success: true, grandTotal, remainingBalance: newRemaining, paymentStatus: newPaymentStatus });
     } catch (err: any) {
-      res.status(500).json({ error: 'تعذر تعديل الطلب' });
+      console.error('Error editing order in PUT /api/orders/:id/edit:', err);
+      res.status(500).json({ error: 'تعذر تعديل الطلب: ' + (err?.message || '') });
     }
   });
 
@@ -2194,6 +2804,7 @@ async function startServer() {
         timeStyle: 'short',
       });
 
+      const nowIso = new Date().toISOString();
       const newPaid = currentPaid + payAmount;
       const newRemaining = Math.max(0, grandTotal - newPaid);
       const newPaymentStatus = newPaid >= grandTotal ? 'Paid' : newPaid > 0 ? 'Partial' : 'Unpaid';
@@ -2211,11 +2822,11 @@ async function startServer() {
           customerName,
           customerPhone,
           payAmount,
-          nowStr,
+          nowIso,
           paymentMethod || 'Cash',
           collectedBy || 'محمد فوزي',
           notes || (markDelivered ? 'تحصيل عند تسليم الطلب' : 'سداد دفعة نقدية'),
-          nowStr,
+          nowIso,
         ]
       );
 
@@ -2266,6 +2877,115 @@ async function startServer() {
     }
   });
 
+  // --- DATE & PERIOD HELPERS FOR REAL PAYMENTS & COLLECTIONS (Server-Authoritative) ---
+  function parsePaymentDate(createdAtStr?: string, paymentDateStr?: string): Date {
+    if (!createdAtStr && !paymentDateStr) return new Date();
+    
+    // 1. Standard ISO date parsing
+    if (createdAtStr) {
+      const d1 = new Date(createdAtStr);
+      if (!isNaN(d1.getTime())) return d1;
+    }
+    if (paymentDateStr) {
+      const d2 = new Date(paymentDateStr);
+      if (!isNaN(d2.getTime())) return d2;
+    }
+    
+    // 2. Arabic / Egyptian locale parsing (e.g. "25/8/2026, 2:30:00 PM" or "2026/8/25")
+    const target = createdAtStr || paymentDateStr || '';
+    const dmyMatch = target.match(/(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{4})/);
+    if (dmyMatch) {
+      const p1 = parseInt(dmyMatch[1], 10);
+      const p2 = parseInt(dmyMatch[2], 10);
+      const p3 = parseInt(dmyMatch[3], 10);
+      // Determine if p1 is day and p2 is month or vice versa
+      const day = p1 > 12 ? p1 : p1;
+      const month = (p1 > 12 ? p2 : p2) - 1;
+      const year = p3;
+      const parsed = new Date(year, month, day, 12, 0, 0);
+      if (!isNaN(parsed.getTime())) return parsed;
+    }
+
+    return new Date();
+  }
+
+  function getPeriodDateRange(
+    period: string,
+    customStart?: string,
+    customEnd?: string
+  ): { start: Date; end: Date } {
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = now.getMonth();
+    const date = now.getDate();
+    const day = now.getDay(); // 0: Sun, 1: Mon, ..., 6: Sat
+
+    switch (period) {
+      case 'today':
+        return {
+          start: new Date(year, month, date, 0, 0, 0, 0),
+          end: new Date(year, month, date, 23, 59, 59, 999),
+        };
+      case 'yesterday':
+        return {
+          start: new Date(year, month, date - 1, 0, 0, 0, 0),
+          end: new Date(year, month, date - 1, 23, 59, 59, 999),
+        };
+      case 'this_week': {
+        // Arab world / Egypt standard: week starts on Saturday (day 6 of JS getDay)
+        const diffToSaturday = (day + 1) % 7;
+        const weekStart = new Date(year, month, date - diffToSaturday, 0, 0, 0, 0);
+        const weekEnd = new Date(weekStart.getTime() + 7 * 24 * 60 * 60 * 1000 - 1);
+        return { start: weekStart, end: weekEnd };
+      }
+      case 'last_week': {
+        const diffToSaturday = (day + 1) % 7;
+        const thisWeekStart = new Date(year, month, date - diffToSaturday, 0, 0, 0, 0);
+        const lastWeekStart = new Date(thisWeekStart.getTime() - 7 * 24 * 60 * 60 * 1000);
+        const lastWeekEnd = new Date(thisWeekStart.getTime() - 1);
+        return { start: lastWeekStart, end: lastWeekEnd };
+      }
+      case 'this_month':
+        return {
+          start: new Date(year, month, 1, 0, 0, 0, 0),
+          end: new Date(year, month + 1, 0, 23, 59, 59, 999),
+        };
+      case 'last_month':
+        return {
+          start: new Date(year, month - 1, 1, 0, 0, 0, 0),
+          end: new Date(year, month, 0, 23, 59, 59, 999),
+        };
+      case 'this_year':
+        return {
+          start: new Date(year, 0, 1, 0, 0, 0, 0),
+          end: new Date(year, 11, 31, 23, 59, 59, 999),
+        };
+      case 'last_year':
+        return {
+          start: new Date(year - 1, 0, 1, 0, 0, 0, 0),
+          end: new Date(year - 1, 11, 31, 23, 59, 59, 999),
+        };
+      case 'custom':
+        if (customStart && customEnd) {
+          const s = new Date(customStart + 'T00:00:00');
+          const e = new Date(customEnd + 'T23:59:59.999');
+          return {
+            start: isNaN(s.getTime()) ? new Date(year, month, 1, 0, 0, 0, 0) : s,
+            end: isNaN(e.getTime()) ? new Date() : e,
+          };
+        }
+        return {
+          start: new Date(year, month, 1, 0, 0, 0, 0),
+          end: new Date(year, month + 1, 0, 23, 59, 59, 999),
+        };
+      default:
+        return {
+          start: new Date(year, month, 1, 0, 0, 0, 0),
+          end: new Date(year, month + 1, 0, 23, 59, 59, 999),
+        };
+    }
+  }
+
   // GET financial summary and customer debts overview (Admin Only)
   app.get('/api/debts', requireAdmin, async (req: Request, res: Response) => {
     try {
@@ -2276,7 +2996,6 @@ async function startServer() {
 
       const customerMap = new Map<string, CustomerDebtSummary>();
       let totalSales = 0;
-      let totalCollected = 0;
       let totalOutstandingDebt = 0;
       let totalOrdersCount = 0;
       let paidOrdersCount = 0;
@@ -2299,7 +3018,6 @@ async function startServer() {
           const orderDate = String(row[10]);
 
           totalSales += grandTotal;
-          totalCollected += paidAmount;
           totalOutstandingDebt += remainingBalance;
           totalOrdersCount++;
 
@@ -2336,12 +3054,56 @@ async function startServer() {
         }
       }
 
+      // Query actual payments table for accurate collections per period (Today, This Week, This Month, This Year)
+      const payRes = db.exec(
+        'SELECT id, amount, paymentDate, createdAt FROM payments ORDER BY createdAt DESC'
+      );
+
+      const todayRange = getPeriodDateRange('today');
+      const thisWeekRange = getPeriodDateRange('this_week');
+      const thisMonthRange = getPeriodDateRange('this_month');
+      const thisYearRange = getPeriodDateRange('this_year');
+
+      let collectedToday = 0;
+      let collectedThisWeek = 0;
+      let collectedThisMonth = 0;
+      let collectedThisYear = 0;
+      let totalCollected = 0;
+
+      if (payRes.length > 0 && payRes[0].values) {
+        for (const row of payRes[0].values) {
+          const amt = Number(row[1] || 0);
+          const paymentDateStr = row[2] ? String(row[2]) : '';
+          const createdAtStr = row[3] ? String(row[3]) : '';
+          const pDate = parsePaymentDate(createdAtStr, paymentDateStr);
+
+          totalCollected += amt;
+
+          if (pDate >= todayRange.start && pDate <= todayRange.end) {
+            collectedToday += amt;
+          }
+          if (pDate >= thisWeekRange.start && pDate <= thisWeekRange.end) {
+            collectedThisWeek += amt;
+          }
+          if (pDate >= thisMonthRange.start && pDate <= thisMonthRange.end) {
+            collectedThisMonth += amt;
+          }
+          if (pDate >= thisYearRange.start && pDate <= thisYearRange.end) {
+            collectedThisYear += amt;
+          }
+        }
+      }
+
       const customersList = Array.from(customerMap.values()).sort((a, b) => b.totalDebt - a.totalDebt);
       const debtorsCount = customersList.filter((c) => c.totalDebt > 0).length;
 
       const summary: FinancialSummary = {
         totalSales,
         totalCollected,
+        collectedToday,
+        collectedThisWeek,
+        collectedThisMonth,
+        collectedThisYear,
         totalOutstandingDebt,
         debtorsCount,
         totalOrdersCount,
@@ -2359,11 +3121,154 @@ async function startServer() {
     }
   });
 
+  // GET Collections and Receipts Detailed Report (Admin Only)
+  app.get('/api/reports/collections', requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const period = (req.query.period as string) || 'this_month';
+      const startDate = req.query.startDate as string | undefined;
+      const endDate = req.query.endDate as string | undefined;
+      const paymentMethodFilter = (req.query.paymentMethod as string) || 'all';
+      const searchQuery = ((req.query.q as string) || '').trim().toLowerCase();
+
+      const db = await getDb();
+      const payRes = db.exec(
+        'SELECT id, orderId, orderNumber, customerId, customerName, customerPhone, amount, paymentDate, paymentMethod, collectedBy, notes, createdAt FROM payments ORDER BY createdAt DESC'
+      );
+
+      const todayRange = getPeriodDateRange('today');
+      const thisWeekRange = getPeriodDateRange('this_week');
+      const thisMonthRange = getPeriodDateRange('this_month');
+      const thisYearRange = getPeriodDateRange('this_year');
+      const selectedRange = getPeriodDateRange(period, startDate, endDate);
+
+      let collectedToday = 0;
+      let collectedThisWeek = 0;
+      let collectedThisMonth = 0;
+      let collectedThisYear = 0;
+      let totalCollectedAllTime = 0;
+
+      let periodTotal = 0;
+      const byMethod = {
+        Cash: 0,
+        Bank: 0,
+        VodafoneCash: 0,
+        Cheque: 0,
+        Other: 0,
+      };
+
+      const filteredPayments: PaymentTransaction[] = [];
+
+      if (payRes.length > 0 && payRes[0].values) {
+        for (const row of payRes[0].values) {
+          const item: PaymentTransaction = {
+            id: String(row[0]),
+            orderId: row[1] ? String(row[1]) : undefined,
+            orderNumber: row[2] ? String(row[2]) : undefined,
+            customerId: String(row[3]),
+            customerName: String(row[4]),
+            customerPhone: row[5] ? String(row[5]) : undefined,
+            amount: Number(row[6]),
+            paymentDate: String(row[7]),
+            paymentMethod: (row[8] as any) || 'Cash',
+            collectedBy: String(row[9]),
+            notes: row[10] ? String(row[10]) : undefined,
+            createdAt: String(row[11]),
+          };
+
+          const pDate = parsePaymentDate(item.createdAt, item.paymentDate);
+          const amt = item.amount || 0;
+
+          // Global periods stats (server-authoritative)
+          totalCollectedAllTime += amt;
+          if (pDate >= todayRange.start && pDate <= todayRange.end) {
+            collectedToday += amt;
+          }
+          if (pDate >= thisWeekRange.start && pDate <= thisWeekRange.end) {
+            collectedThisWeek += amt;
+          }
+          if (pDate >= thisMonthRange.start && pDate <= thisMonthRange.end) {
+            collectedThisMonth += amt;
+          }
+          if (pDate >= thisYearRange.start && pDate <= thisYearRange.end) {
+            collectedThisYear += amt;
+          }
+
+          // Filter for selected period
+          const inPeriod = pDate >= selectedRange.start && pDate <= selectedRange.end;
+          if (!inPeriod) continue;
+
+          // Filter by payment method
+          if (paymentMethodFilter !== 'all' && item.paymentMethod !== paymentMethodFilter) {
+            continue;
+          }
+
+          // Filter by search query
+          if (searchQuery) {
+            const match =
+              (item.customerName || '').toLowerCase().includes(searchQuery) ||
+              (item.customerPhone || '').includes(searchQuery) ||
+              (item.orderNumber || '').toLowerCase().includes(searchQuery) ||
+              (item.collectedBy || '').toLowerCase().includes(searchQuery) ||
+              (item.notes || '').toLowerCase().includes(searchQuery);
+            if (!match) continue;
+          }
+
+          // Accumulate breakdown
+          const m = item.paymentMethod;
+          if (m === 'Cash') byMethod.Cash += amt;
+          else if (m === 'Bank') byMethod.Bank += amt;
+          else if (m === 'VodafoneCash') byMethod.VodafoneCash += amt;
+          else if (m === 'Cheque' || m === 'Check') byMethod.Cheque += amt;
+          else byMethod.Other += amt;
+
+          periodTotal += amt;
+          filteredPayments.push(item);
+        }
+      }
+
+      // Outstanding Debt & Total Sales Calculation
+      let totalSales = 0;
+      let totalOutstandingDebt = 0;
+      const ordersRes = db.exec(
+        'SELECT grandTotal, remainingBalance FROM orders WHERE status != "Cancelled"'
+      );
+      if (ordersRes.length > 0 && ordersRes[0].values) {
+        for (const row of ordersRes[0].values) {
+          totalSales += Number(row[0] || 0);
+          totalOutstandingDebt += Number(row[1] || 0);
+        }
+      }
+
+      res.json({
+        summary: {
+          today: collectedToday,
+          thisWeek: collectedThisWeek,
+          thisMonth: collectedThisMonth,
+          thisYear: collectedThisYear,
+          totalOutstandingDebt,
+          totalSales,
+          totalCollectedAllTime,
+        },
+        periodSummary: {
+          period: period as any,
+          startDate,
+          endDate,
+          totalCollected: periodTotal,
+          transactionsCount: filteredPayments.length,
+          byMethod,
+        },
+        payments: filteredPayments,
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: 'تعذر توليد تقرير التحصيل والمقبوضات' });
+    }
+  });
+
   // GET fast customer debt check (Authorized for Admin or matching Customer)
-  app.get('/api/customers/:id/debt', async (req: Request, res: Response) => {
+  app.get('/api/customers/:id/debt', requireCustomerIsolation('id'), async (req: Request, res: Response) => {
     try {
       const { id } = req.params;
-      const authUser = await getAuthUser(req);
+      const authUser = (req as any).user || (await getAuthUser(req));
 
       if (!authUser) {
         return res.status(401).json({ error: 'يرجى تسجيل الدخول للوصول إلى بيانات الحساب' });
@@ -2376,10 +3281,14 @@ async function startServer() {
         }
       }
 
+      // Always bind to current session identity if customer
+      const queryId = authUser.role === 'customer' ? authUser.id : id;
+      const queryPhone = authUser.role === 'customer' ? authUser.phone : id;
+
       const db = await getDb();
       const resStmt = db.exec(
         'SELECT SUM(grandTotal), SUM(paidAmount), SUM(remainingBalance), COUNT(*) FROM orders WHERE (customerId = ? OR customerPhone = ?) AND status != "Cancelled"',
-        [id, id]
+        [queryId, queryPhone]
       );
 
       let totalInvoiced = 0;
@@ -2396,7 +3305,7 @@ async function startServer() {
       }
 
       res.json({
-        customerId: id,
+        customerId: queryId,
         totalInvoiced,
         totalPaid,
         totalDebt: Math.max(0, totalDebt),
@@ -2408,10 +3317,10 @@ async function startServer() {
   });
 
   // GET detailed customer statement (Authorized for Admin or matching Customer)
-  app.get('/api/customers/:id/statement', async (req: Request, res: Response) => {
+  app.get('/api/customers/:id/statement', requireCustomerIsolation('id'), async (req: Request, res: Response) => {
     try {
       const { id } = req.params;
-      const authUser = await getAuthUser(req);
+      const authUser = (req as any).user || (await getAuthUser(req));
 
       if (!authUser) {
         return res.status(401).json({ error: 'يرجى تسجيل الدخول للوصول إلى كشف الحساب' });
@@ -2424,10 +3333,14 @@ async function startServer() {
         }
       }
 
+      // Always bind to current session identity if customer
+      const queryId = authUser.role === 'customer' ? authUser.id : id;
+      const queryPhone = authUser.role === 'customer' ? authUser.phone : id;
+
       const db = await getDb();
 
       let customer = {
-        id,
+        id: queryId,
         name: 'عميل',
         phone: '',
         storeName: '',
@@ -2437,7 +3350,7 @@ async function startServer() {
       const userStmt = db.prepare(
         'SELECT id, fullName, phone, storeName, address FROM users WHERE id = ? OR phone = ?'
       );
-      userStmt.bind([id, id]);
+      userStmt.bind([queryId, queryPhone]);
       if (userStmt.step()) {
         const u = userStmt.getAsObject();
         customer = {
@@ -2452,7 +3365,7 @@ async function startServer() {
         userStmt.free();
         const ordCustStmt = db.exec(
           'SELECT customerId, customerName, customerPhone, customerAddress FROM orders WHERE customerId = ? OR customerPhone = ? LIMIT 1',
-          [id, id]
+          [queryId, queryPhone]
         );
         if (ordCustStmt.length > 0 && ordCustStmt[0].values.length > 0) {
           const row = ordCustStmt[0].values[0];
@@ -2466,10 +3379,10 @@ async function startServer() {
         }
       }
 
-      // Fetch customer orders
+      // Fetch customer orders with mandatory session isolation
       const ordersRes = db.exec(
         'SELECT * FROM orders WHERE (customerId = ? OR customerPhone = ?) AND status != "Cancelled" ORDER BY createdAt DESC',
-        [id, customer.phone || id]
+        [queryId, queryPhone]
       );
       const orders: Order[] = [];
       let totalInvoiced = 0;
@@ -2516,10 +3429,10 @@ async function startServer() {
         }
       }
 
-      // Fetch customer payments
+      // Fetch customer payments with mandatory session isolation
       const payRes = db.exec(
         'SELECT * FROM payments WHERE customerId = ? OR customerPhone = ? ORDER BY createdAt DESC',
-        [id, customer.phone || id]
+        [queryId, queryPhone]
       );
       const payments: PaymentTransaction[] = [];
       if (payRes.length > 0 && payRes[0].values) {
@@ -2641,6 +3554,7 @@ async function startServer() {
 
       // Record total payment transaction
       const payId = 'pay_' + Date.now();
+      const nowIso = new Date().toISOString();
       db.run(
         `INSERT INTO payments (id, orderId, orderNumber, customerId, customerName, customerPhone, amount, paymentDate, paymentMethod, collectedBy, notes, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
@@ -2651,11 +3565,11 @@ async function startServer() {
           customerName,
           customerPhone,
           payAmount,
-          nowStr,
+          nowIso,
           paymentMethod || 'Cash',
           collectedBy || 'محمد فوزي',
           notes || 'تحصيل عام من رصيد العميل',
-          nowStr,
+          nowIso,
         ]
       );
 
@@ -2670,18 +3584,289 @@ async function startServer() {
     }
   });
 
-  // GET Payments (Admin gets all, Customer gets only their own)
-  app.get('/api/payments', async (req: Request, res: Response) => {
+  // POST Settle Full Customer Debt (Admin Only - Server-Authoritative Full Debt Settlement)
+  const handleFullDebtSettlement = async (req: Request, res: Response) => {
     try {
-      const authUser = await getAuthUser(req);
+      const { id } = req.params;
+      const authUser = (req as any).user || (await getAuthUser(req));
+      if (!authUser || authUser.role !== 'admin') {
+        return res.status(403).json({
+          success: false,
+          error: 'غير مصرح لك بتنفيذ التحصيل الكامل. هذه العملية متاحة للأدمن فقط.',
+        });
+      }
+
+      const db = await getDb();
+      const adminName = authUser.fullName || 'محمد فوزي (الإدارة)';
+      const paymentMethod = (req.body?.paymentMethod as string) || 'Cash';
+      const userNotes = req.body?.notes ? String(req.body.notes).trim() : '';
+
+      // 1. Fetch customer details
+      let customerId = id;
+      let customerName = 'عميل';
+      let customerPhone = '';
+
+      const userStmt = db.prepare('SELECT id, fullName, phone, storeName FROM users WHERE id = ? OR phone = ?');
+      userStmt.bind([id, id]);
+      if (userStmt.step()) {
+        const u = userStmt.getAsObject();
+        customerId = String(u.id);
+        customerName = String(u.fullName || 'عميل');
+        customerPhone = String(u.phone || '');
+      }
+      userStmt.free();
+
+      // 2. Fetch all unpaid or partially paid orders directly from database
+      const ordersRes = db.exec(
+        'SELECT id, orderNumber, customerName, customerPhone, grandTotal, paidAmount, remainingBalance FROM orders WHERE (customerId = ? OR customerPhone = ?) AND remainingBalance > 0 AND status != "Cancelled" ORDER BY createdAt ASC',
+        [customerId, customerPhone || customerId]
+      );
+
+      let actualTotalDebt = 0;
+      const ordersToSettle: Array<{
+        id: string;
+        orderNumber: string;
+        grandTotal: number;
+        paidAmount: number;
+        remainingBalance: number;
+      }> = [];
+
+      if (ordersRes.length > 0 && ordersRes[0].values) {
+        for (const row of ordersRes[0].values) {
+          const ordId = String(row[0]);
+          const ordNum = String(row[1]);
+          const ordCustomerName = String(row[2] || '');
+          const ordCustomerPhone = row[3] ? String(row[3]) : '';
+          const grandTotal = Number(row[4]);
+          const paidAmount = Number(row[5] || 0);
+          const remainingBalance = Number(row[6] || 0);
+
+          if (!customerName || customerName === 'عميل') {
+            customerName = ordCustomerName;
+          }
+          if (!customerPhone) {
+            customerPhone = ordCustomerPhone;
+          }
+
+          if (remainingBalance > 0) {
+            actualTotalDebt += remainingBalance;
+            ordersToSettle.push({
+              id: ordId,
+              orderNumber: ordNum,
+              grandTotal,
+              paidAmount,
+              remainingBalance,
+            });
+          }
+        }
+      }
+
+      // 3. Strict Server-Side check: Debt must be strictly greater than 0
+      if (actualTotalDebt <= 0 || ordersToSettle.length === 0) {
+        return res.status(400).json({
+          success: false,
+          error: 'لا توجد أي مديونية فعلية مستحقة على هذا العميل (إجمالي المديونية الحالية 0 ج.م)',
+        });
+      }
+
+      const nowStr = new Date().toLocaleString('ar-EG', {
+        dateStyle: 'short',
+        timeStyle: 'short',
+      });
+
+      // 4. Update each order to fully Paid with 0 remaining balance and add audit log
+      for (const ord of ordersToSettle) {
+        db.run(
+          `UPDATE orders SET paidAmount = ?, remainingBalance = 0, paymentStatus = 'Paid', updatedAt = ? WHERE id = ?`,
+          [ord.grandTotal, nowStr, ord.id]
+        );
+
+        db.run(
+          `INSERT INTO order_logs (id, orderId, timestamp, action, performedBy, details) VALUES (?, ?, ?, ?, ?, ?)`,
+          [
+            'log_' + Date.now() + Math.random().toString(36).substring(2, 5),
+            ord.id,
+            nowStr,
+            'تحصيل كامل المديونية',
+            adminName,
+            `تم سداد كامل متبقي الفاتورة (${(ord.remainingBalance || 0).toLocaleString('ar-EG')} ج) ضمن عملية التحصيل الكامل للحساب بواسطة ${adminName}`,
+          ]
+        );
+      }
+
+      // 5. Insert genuine transaction record in payments table
+      const payId = 'pay_' + Date.now();
+      const nowIso = new Date().toISOString();
+      const settlementNotes = userNotes
+        ? `تحصيل كامل المديونية (${actualTotalDebt.toLocaleString('ar-EG')} ج) - ${userNotes}`
+        : `تحصيل وسداد كامل المديونية المستحقة على الحساب (${ordersToSettle.length} فواتير)`;
+
+      db.run(
+        `INSERT INTO payments (id, orderId, orderNumber, customerId, customerName, customerPhone, amount, paymentDate, paymentMethod, collectedBy, notes, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          payId,
+          null,
+          'تحصيل كامل المديونية',
+          customerId,
+          customerName,
+          customerPhone,
+          actualTotalDebt,
+          nowIso,
+          paymentMethod,
+          adminName,
+          settlementNotes,
+          nowIso,
+        ]
+      );
+
+      // 6. Record System Notification
+      db.run(
+        `INSERT INTO notifications (id, title, message, type, read, createdAt) VALUES (?, ?, ?, ?, ?, ?)`,
+        [
+          'notif_' + Date.now(),
+          `تحصيل كامل مديونية ${customerName}`,
+          `قام ${adminName} بتحصيل كامل مديونية العميل ${customerName} بقيمة ${(actualTotalDebt || 0).toLocaleString('ar-EG')} ج بنجاح`,
+          'system',
+          0,
+          nowStr,
+        ]
+      );
+
+      saveDb();
+
+      res.json({
+        success: true,
+        settledAmount: actualTotalDebt,
+        settledOrdersCount: ordersToSettle.length,
+        remainingDebt: 0,
+        customer: {
+          id: customerId,
+          name: customerName,
+          phone: customerPhone,
+          totalDebt: 0,
+        },
+        message: 'تم تحصيل كامل مديونية العميل بنجاح',
+      });
+    } catch (err: any) {
+      console.error('Error settling full debt:', err);
+      res.status(500).json({ error: 'تعذر تنفيذ التحصيل الكامل للعميل' });
+    }
+  };
+
+  app.post('/api/customers/:id/settle-full', requireAdmin, handleFullDebtSettlement);
+  app.post('/api/customers/:id/full-collection', requireAdmin, handleFullDebtSettlement);
+
+  // GET Admin Customers List with Aggregated Stats (Admin Only)
+  app.get('/api/admin/customers', requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const db = await getDb();
+      const usersRes = db.exec(
+        `SELECT id, username, fullName, phone, role, storeName, address, createdAt, status FROM users WHERE role = 'customer' ORDER BY createdAt DESC`
+      );
+
+      const customersList: AdminCustomerRecord[] = [];
+      if (usersRes.length > 0 && usersRes[0].values) {
+        for (const row of usersRes[0].values) {
+          const custId = String(row[0]);
+          const username = String(row[1]);
+          const fullName = String(row[2]);
+          const phone = String(row[3]);
+          const storeName = row[5] ? String(row[5]) : '';
+          const address = row[6] ? String(row[6]) : '';
+          const createdAt = row[7] ? String(row[7]) : '';
+          const status = (row[8] as any) === 'disabled' ? 'disabled' : 'active';
+
+          // Aggregate orders stats
+          const ordStmt = db.prepare(
+            `SELECT COUNT(*) as ordersCount, SUM(grandTotal) as totalPurchases, SUM(paidAmount) as totalPaid, SUM(remainingBalance) as currentDebt
+             FROM orders
+             WHERE (customerId = ? OR customerPhone = ?) AND status != 'Cancelled'`
+          );
+          ordStmt.bind([custId, phone]);
+
+          let ordersCount = 0;
+          let totalPurchases = 0;
+          let totalPaid = 0;
+          let currentDebt = 0;
+
+          if (ordStmt.step()) {
+            const stats = ordStmt.getAsObject();
+            ordersCount = Number(stats.ordersCount || 0);
+            totalPurchases = Number(stats.totalPurchases || 0);
+            totalPaid = Number(stats.totalPaid || 0);
+            currentDebt = Math.max(0, Number(stats.currentDebt || 0));
+          }
+          ordStmt.free();
+
+          customersList.push({
+            id: custId,
+            username,
+            fullName,
+            storeName,
+            phone,
+            address,
+            ordersCount,
+            totalPurchases,
+            totalPaid,
+            currentDebt,
+            createdAt: createdAt || '2026-08-01',
+            status,
+          });
+        }
+      }
+
+      res.json(customersList);
+    } catch (err: any) {
+      console.error('Error fetching admin customers:', err);
+      res.status(500).json({ error: 'تعذر جلب قائمة العملاء' });
+    }
+  });
+
+  // PUT Toggle / Update Customer Status (Active / Disabled) (Admin Only)
+  app.put('/api/admin/customers/:id/status', requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const { status } = req.body;
+      const newStatus = status === 'disabled' ? 'disabled' : 'active';
+      const ip = getClientIp(req);
+      const db = await getDb();
+
+      db.run(`UPDATE users SET status = ? WHERE id = ? OR phone = ?`, [newStatus, id, id]);
+      
+      if (newStatus === 'disabled') {
+        // Immediately revoke all sessions for this customer
+        revokeAllUserSessions(db, id);
+      }
+
+      saveDb();
+
+      logSecurityEvent(
+        db,
+        newStatus === 'disabled' ? 'CUSTOMER_ACCOUNT_DISABLED' : 'CUSTOMER_ACCOUNT_ENABLED',
+        id,
+        undefined,
+        ip,
+        `Admin changed customer status to ${newStatus}`
+      );
+
+      res.json({
+        success: true,
+        status: newStatus,
+        message: newStatus === 'disabled' ? 'تم تعطيل حساب العميل بنجاح' : 'تم تفعيل حساب العميل بنجاح',
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: 'تعذر تغيير حالة حساب العميل' });
+    }
+  });
+
+  // GET Payments (Admin gets all, Customer gets only their own - Protected)
+  app.get('/api/payments', requireAuth, async (req: Request, res: Response) => {
+    try {
+      const authUser = (req as any).user as User;
       const db = await getDb();
 
       let sql = 'SELECT * FROM payments';
       const params: any[] = [];
-
-      if (!authUser) {
-        return res.json([]);
-      }
 
       if (authUser.role === 'customer') {
         sql += ' WHERE customerId = ? OR customerPhone = ?';
@@ -2785,6 +3970,22 @@ async function startServer() {
         return res.status(400).json({ error: 'رسالة فارغة' });
       }
 
+      const authUser = await getAuthUser(req);
+      let targetCustId: string | null = null;
+      let targetCustPhone: string | null = null;
+
+      if (authUser) {
+        if (authUser.role === 'customer') {
+          // Strictly use the logged-in customer's own session identity
+          targetCustId = authUser.id;
+          targetCustPhone = authUser.phone;
+        } else if (authUser.role === 'admin' && customerId) {
+          // Admin can query on behalf of a specific customer
+          targetCustId = String(customerId);
+          targetCustPhone = String(customerId);
+        }
+      }
+
       const db = await getDb();
 
       // Retrieve current system settings
@@ -2812,10 +4013,10 @@ async function startServer() {
       let customerDebt = 0;
       let latestOrderSummary = 'لا يوجد طلبات سابقة.';
 
-      if (customerId) {
+      if (targetCustId) {
         const debtRes = db.exec(
           'SELECT SUM(grandTotal), SUM(paidAmount), SUM(remainingBalance), COUNT(*) FROM orders WHERE (customerId = ? OR customerPhone = ?) AND status != "Cancelled"',
-          [customerId, customerId]
+          [targetCustId, targetCustPhone || targetCustId]
         );
         if (debtRes.length > 0 && debtRes[0].values && debtRes[0].values[0]) {
           const row = debtRes[0].values[0];
@@ -2824,7 +4025,7 @@ async function startServer() {
 
         const lastOrdRes = db.exec(
           'SELECT orderNumber, status, grandTotal, paidAmount, remainingBalance, createdAt FROM orders WHERE (customerId = ? OR customerPhone = ?) ORDER BY createdAt DESC LIMIT 1',
-          [customerId, customerId]
+          [targetCustId, targetCustPhone || targetCustId]
         );
         if (lastOrdRes.length > 0 && lastOrdRes[0].values && lastOrdRes[0].values[0]) {
           const ordRow = lastOrdRes[0].values[0];

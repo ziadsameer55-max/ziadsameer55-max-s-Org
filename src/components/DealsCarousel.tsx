@@ -25,21 +25,25 @@ interface DealsCarouselProps {
   onUpdateCartItem: (product: Product, delta: number) => void;
   onSetCartItemQty: (product: Product, quantity: number) => void;
   onViewAllDeals?: () => void;
+  isStoreOpen?: boolean;
 }
 
 export const DealsCarousel: React.FC<DealsCarouselProps> = ({
-  deals,
-  products,
+  deals = [],
+  products = [],
   settings,
-  cartItems,
+  cartItems = [],
   onUpdateCartItem,
   onSetCartItemQty,
   onViewAllDeals,
+  isStoreOpen = true,
 }) => {
   const isPricesHidden = Boolean(settings?.hidePrices);
 
+  const safeDeals = Array.isArray(deals) ? deals : [];
+
   // Filter out any deals that are inactive or expired
-  const activeDeals = deals.filter((d) => d.isActive && !d.isExpired);
+  const activeDeals = safeDeals.filter((d) => d.isActive && !d.isExpired);
 
   if (activeDeals.length === 0) {
     return null;
@@ -85,7 +89,7 @@ export const DealsCarousel: React.FC<DealsCarouselProps> = ({
       {/* Horizontal Scroll Track */}
       <div className="flex items-stretch gap-3 overflow-x-auto pb-2 pt-1 scrollbar-thin scrollbar-thumb-amber-300 scrollbar-track-transparent">
         {activeDeals.map((deal) => {
-          // Match underlying product
+          // Match underlying product and ensure deal offer price is active for cart additions
           const matchedProduct = products.find((p) => p.id === deal.productId) || {
             id: deal.productId,
             name: deal.productName,
@@ -99,18 +103,27 @@ export const DealsCarousel: React.FC<DealsCarouselProps> = ({
             stock: 100,
           };
 
-          const cartItem = cartItems.find((ci) => ci.product.id === matchedProduct.id);
+          const effectiveProduct: Product = {
+            ...matchedProduct,
+            price: isPricesHidden ? 0 : deal.offerPrice,
+            name: deal.productName || matchedProduct.name,
+            image: deal.productImage || matchedProduct.image,
+            unit: deal.productUnit || matchedProduct.unit,
+          };
+
+          const cartItem = cartItems.find((ci) => ci.product.id === effectiveProduct.id);
           const currentQty = cartItem ? cartItem.quantity : 0;
 
           return (
             <DealCard
               key={deal.id}
               deal={deal}
-              product={matchedProduct}
+              product={effectiveProduct}
               quantity={currentQty}
               isPricesHidden={isPricesHidden}
               onUpdateQty={onUpdateCartItem}
               onSetQty={onSetCartItemQty}
+              isStoreOpen={isStoreOpen}
             />
           );
         })}
@@ -126,6 +139,7 @@ interface DealCardProps {
   isPricesHidden: boolean;
   onUpdateQty: (product: Product, delta: number) => void;
   onSetQty: (product: Product, qty: number) => void;
+  isStoreOpen?: boolean;
 }
 
 const DealCard: React.FC<DealCardProps> = ({
@@ -135,6 +149,7 @@ const DealCard: React.FC<DealCardProps> = ({
   isPricesHidden,
   onUpdateQty,
   onSetQty,
+  isStoreOpen = true,
 }) => {
   // Offer Type Styling & Icons
   const getTypeBadge = (type: string) => {
@@ -281,7 +296,12 @@ const DealCard: React.FC<DealCardProps> = ({
 
           {/* Action Button / Cart Controls */}
           <div className="mt-2.5">
-            {quantity === 0 ? (
+            {!isStoreOpen ? (
+              <div className="w-full py-2 px-3 bg-red-50 border border-red-200 text-red-700 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 shadow-2xs">
+                <Lock className="w-3.5 h-3.5" />
+                <span>مغلق</span>
+              </div>
+            ) : quantity === 0 ? (
               <button
                 onClick={() => onUpdateQty(product, 1)}
                 className="w-full py-2 px-3 bg-gradient-to-r from-emerald-700 to-emerald-800 hover:from-emerald-800 hover:to-emerald-900 active:scale-[0.98] text-white rounded-xl text-xs font-black flex items-center justify-center gap-1.5 shadow-sm transition-all"

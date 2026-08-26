@@ -38,12 +38,13 @@ const CATEGORY_ICONS: Record<string, string> = {
 };
 
 export const CategoriesExploreView: React.FC<CategoriesExploreViewProps> = ({
-  categories,
-  products,
+  categories = [],
+  products = [],
   onSelectCategory,
 }) => {
+  const safeProducts = Array.isArray(products) ? products : [];
   const getProductCount = (categoryName: string) => {
-    return products.filter(
+    return safeProducts.filter(
       (p) => p.category === categoryName && p.status !== 'hidden'
     ).length;
   };

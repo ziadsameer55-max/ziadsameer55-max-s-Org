@@ -33,9 +33,9 @@ interface AdminFastOrdersProps {
 }
 
 export const AdminFastOrders: React.FC<AdminFastOrdersProps> = ({
-  orders,
+  orders = [],
   settings,
-  allProducts,
+  allProducts = [],
   onToggleOrdersOpen,
   onUpdateStatus,
   onOpenEditModal,
@@ -56,16 +56,17 @@ export const AdminFastOrders: React.FC<AdminFastOrdersProps> = ({
   const [collectError, setCollectError] = useState('');
   const [collectSuccess, setCollectSuccess] = useState('');
 
-  const pendingOrders = orders.filter((o) => o.status === 'Pending');
+  const safeOrders = Array.isArray(orders) ? orders : [];
+  const pendingOrders = safeOrders.filter((o) => o.status === 'Pending');
   const isOrdersOpen = settings?.manualOrdersOpen ?? true;
 
-  const filteredOrders = orders.filter((o) => {
+  const filteredOrders = safeOrders.filter((o) => {
     if (filterStatus !== 'all' && o.status !== filterStatus) return false;
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase().trim();
-      const matchNum = o.orderNumber.toLowerCase().includes(q);
-      const matchName = o.customerName.toLowerCase().includes(q);
-      const matchPhone = o.customerPhone.includes(q);
+      const matchNum = (o.orderNumber || '').toLowerCase().includes(q);
+      const matchName = (o.customerName || '').toLowerCase().includes(q);
+      const matchPhone = (o.customerPhone || '').includes(q);
       return matchNum || matchName || matchPhone;
     }
     return true;

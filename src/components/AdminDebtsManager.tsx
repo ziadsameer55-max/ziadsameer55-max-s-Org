@@ -53,6 +53,106 @@ export const AdminDebtsManager: React.FC<AdminDebtsManagerProps> = ({
   const [collectError, setCollectError] = useState('');
   const [collectSuccess, setCollectSuccess] = useState('');
 
+  // Full Debt Settlement Modal State
+  const [fullCollectCustomer, setFullCollectCustomer] = useState<CustomerDebtSummary | null>(null);
+  const [fullCollecting, setFullCollecting] = useState(false);
+  const [fullCollectMethod, setFullCollectMethod] = useState<'Cash' | 'Bank' | 'VodafoneCash' | 'Cheque'>('Cash');
+  const [fullCollectNotes, setFullCollectNotes] = useState('');
+  const [fullCollectError, setFullCollectError] = useState('');
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+
+  const showToast = (msg: string) => {
+    setToastMessage(msg);
+    setTimeout(() => {
+      setToastMessage(null);
+    }, 4000);
+  };
+
+  const handleExecuteFullSettlement = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (!fullCollectCustomer) return;
+
+    setFullCollecting(true);
+    setFullCollectError('');
+
+    try {
+      const res = await apiFetch(`/api/customers/${encodeURIComponent(fullCollectCustomer.customerId)}/settle-full`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          paymentMethod: fullCollectMethod,
+          notes: fullCollectNotes.trim(),
+        }),
+      });
+
+      const data = await res.json();
+      if (res.ok && data.success) {
+        const settledAmount = Number(data.settledAmount || fullCollectCustomer.totalDebt);
+        showToast('✅ تم تحصيل كامل مديونية العميل بنجاح');
+
+        // Update local customers state immediately without page refresh
+        setCustomers((prev) =>
+          prev.map((c) => {
+            if (c.customerId === fullCollectCustomer.customerId) {
+              return {
+                ...c,
+                totalPaid: (c.totalPaid || 0) + settledAmount,
+                totalDebt: 0,
+                paidOrdersCount: (c.paidOrdersCount || 0) + (c.unpaidOrdersCount || 0),
+                unpaidOrdersCount: 0,
+              };
+            }
+            return c;
+          })
+        );
+
+        // Update summary state immediately
+        setSummary((prev) => {
+          if (!prev) return prev;
+          return {
+            ...prev,
+            totalCollected: (prev.totalCollected || 0) + settledAmount,
+            totalOutstandingDebt: Math.max(0, (prev.totalOutstandingDebt || 0) - settledAmount),
+            debtorsCount: Math.max(0, (prev.debtorsCount || 0) - 1),
+            paidOrdersCount: (prev.paidOrdersCount || 0) + (fullCollectCustomer.unpaidOrdersCount || 1),
+            unpaidOrdersCount: Math.max(0, (prev.unpaidOrdersCount || 0) - (fullCollectCustomer.unpaidOrdersCount || 1)),
+          };
+        });
+
+        // If statement modal is open, update its content immediately
+        if (selectedStatement && (selectedStatement.customer.id === fullCollectCustomer.customerId || selectedStatement.customer.phone === fullCollectCustomer.customerPhone)) {
+          setSelectedStatement((prev) => {
+            if (!prev) return prev;
+            return {
+              ...prev,
+              summary: {
+                ...prev.summary,
+                totalPaid: (prev.summary.totalPaid || 0) + settledAmount,
+                totalDebt: 0,
+              },
+              orders: (prev.orders || []).map((ord) => ({
+                ...ord,
+                paidAmount: ord.grandTotal,
+                remainingBalance: 0,
+                paymentStatus: 'Paid',
+              })),
+            };
+          });
+        }
+
+        setFullCollectCustomer(null);
+        fetchDebtsData();
+        if (onRefreshData) onRefreshData();
+      } else {
+        setFullCollectError(data.error || 'حدث خطأ أثناء تنفيذ التحصيل الكامل');
+      }
+    } catch (err: any) {
+      setFullCollectError('تعذر الاتصال بالخادم');
+    } finally {
+      setFullCollecting(false);
+    }
+  };
+
   const fetchDebtsData = async () => {
     setLoading(true);
     try {
@@ -63,13 +163,13 @@ export const AdminDebtsManager: React.FC<AdminDebtsManagerProps> = ({
 
       if (debtsRes.ok) {
         const data = await debtsRes.json();
-        setSummary(data.summary);
-        setCustomers(data.customers || []);
+        setSummary(data?.summary || null);
+        setCustomers(Array.isArray(data?.customers) ? data.customers : []);
       }
 
       if (paymentsRes.ok) {
         const pData = await paymentsRes.json();
-        setPayments(pData || []);
+        setPayments(Array.isArray(pData) ? pData : []);
       }
     } catch (err) {
       console.error('Failed to load debts:', err);
@@ -172,24 +272,26 @@ export const AdminDebtsManager: React.FC<AdminDebtsManagerProps> = ({
     window.open(url, '_blank');
   };
 
-  const filteredCustomers = customers.filter((c) => {
-    if (activeTab === 'debtors' && c.totalDebt <= 0) return false;
+  const safeCustomers = Array.isArray(customers) ? customers : [];
+  const filteredCustomers = safeCustomers.filter((c) => {
+    if (activeTab === 'debtors' && (c.totalDebt || 0) <= 0) return false;
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase().trim();
       return (
-        c.customerName.toLowerCase().includes(q) ||
-        c.customerPhone.includes(q) ||
+        (c.customerName || '').toLowerCase().includes(q) ||
+        (c.customerPhone || '').includes(q) ||
         (c.address && c.address.toLowerCase().includes(q))
       );
     }
     return true;
   });
 
-  const filteredPayments = payments.filter((p) => {
+  const safePayments = Array.isArray(payments) ? payments : [];
+  const filteredPayments = safePayments.filter((p) => {
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase().trim();
       return (
-        p.customerName.toLowerCase().includes(q) ||
+        (p.customerName || '').toLowerCase().includes(q) ||
         (p.customerPhone && p.customerPhone.includes(q)) ||
         (p.orderNumber && p.orderNumber.toLowerCase().includes(q)) ||
         (p.collectedBy && p.collectedBy.toLowerCase().includes(q))
@@ -200,6 +302,14 @@ export const AdminDebtsManager: React.FC<AdminDebtsManagerProps> = ({
 
   return (
     <div className="space-y-4 text-right pb-24 max-w-5xl mx-auto" dir="rtl">
+      {/* Toast Notification */}
+      {toastMessage && (
+        <div className="fixed top-5 left-1/2 -translate-x-1/2 z-50 bg-emerald-800 text-white px-5 py-3 rounded-2xl shadow-2xl font-black text-sm flex items-center gap-2.5 border border-emerald-600 animate-bounce">
+          <CheckCircle2 className="w-5 h-5 text-emerald-200" />
+          <span>{toastMessage}</span>
+        </div>
+      )}
+
       {/* Top Banner */}
       <div className="bg-slate-900 text-white rounded-2xl p-4 shadow-md flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-3">
@@ -255,8 +365,13 @@ export const AdminDebtsManager: React.FC<AdminDebtsManagerProps> = ({
           <div className="font-black text-lg sm:text-xl text-emerald-800 font-mono mt-1">
             {(summary?.totalCollected || 0).toLocaleString('ar-EG')} ج
           </div>
-          <div className="text-[11px] text-emerald-700 mt-0.5">
-            {summary?.paidOrdersCount || 0} فاتورة مدفوعة بالكامل
+          <div className="text-[11px] text-emerald-800 font-bold mt-0.5 flex flex-wrap items-center gap-1.5">
+            {summary?.collectedToday !== undefined && (
+              <span>اليوم: {summary.collectedToday.toLocaleString('ar-EG')} ج</span>
+            )}
+            {summary?.collectedThisMonth !== undefined && (
+              <span>• الشهر: {summary.collectedThisMonth.toLocaleString('ar-EG')} ج</span>
+            )}
           </div>
         </div>
 
@@ -474,23 +589,43 @@ export const AdminDebtsManager: React.FC<AdminDebtsManagerProps> = ({
                     </div>
                   </div>
 
-                  {/* Actions */}
-                  <div className="flex items-center gap-2 w-full md:w-auto justify-end pt-1 md:pt-0">
+                  {/* Actions: 🟡 تحصيل جزئي | 🟢 تم التحصيل الكامل | 📋 كشف حساب */}
+                  <div className="flex flex-wrap items-center gap-2 w-full md:w-auto justify-end pt-1 md:pt-0">
                     {hasDebt && (
-                      <button
-                        onClick={() => handleOpenCollectModal(cust)}
-                        className="px-3 py-2 bg-emerald-700 hover:bg-emerald-800 text-white font-bold text-xs rounded-xl shadow-xs transition-colors flex items-center gap-1"
-                      >
-                        <Plus className="w-3.5 h-3.5" />
-                        <span>تسجيل تحصيل</span>
-                      </button>
+                      <>
+                        {/* 🟡 تحصيل جزئي */}
+                        <button
+                          onClick={() => handleOpenCollectModal(cust)}
+                          className="px-3 py-2 bg-amber-500 hover:bg-amber-600 text-slate-950 font-black text-xs rounded-xl shadow-xs transition-all flex items-center gap-1.5 border border-amber-400 hover:scale-[1.02] active:scale-[0.98]"
+                          title="تسجيل دفعة جزئية بمبلغ يحدده الأدمن"
+                        >
+                          <DollarSign className="w-3.5 h-3.5 text-slate-950" />
+                          <span>تحصيل جزئي</span>
+                        </button>
+
+                        {/* 🟢 تم التحصيل الكامل */}
+                        <button
+                          onClick={() => {
+                            setFullCollectCustomer(cust);
+                            setFullCollectMethod('Cash');
+                            setFullCollectNotes('');
+                            setFullCollectError('');
+                          }}
+                          className="px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs rounded-xl shadow-xs transition-all flex items-center gap-1.5 border border-emerald-500 hover:scale-[1.02] active:scale-[0.98]"
+                          title="تحصيل كامل المبلغ المستحق وتصفير المديونية فورًا"
+                        >
+                          <CheckCircle2 className="w-3.5 h-3.5" />
+                          <span>تم التحصيل الكامل</span>
+                        </button>
+                      </>
                     )}
 
+                    {/* 📋 كشف حساب */}
                     <button
                       onClick={() => openStatement(cust.customerId)}
-                      className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold text-xs rounded-xl transition-colors flex items-center gap-1 border border-slate-300"
+                      className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold text-xs rounded-xl transition-colors flex items-center gap-1.5 border border-slate-300"
                     >
-                      <FileText className="w-3.5 h-3.5" />
+                      <FileText className="w-3.5 h-3.5 text-slate-600" />
                       <span>كشف حساب</span>
                     </button>
                   </div>
@@ -770,20 +905,50 @@ export const AdminDebtsManager: React.FC<AdminDebtsManagerProps> = ({
             </div>
 
             {/* Footer Actions */}
-            <div className="pt-3 border-t border-slate-200 mt-3 flex justify-between items-center">
-              <button
-                onClick={() => {
-                  const custObj = customers.find((c) => c.customerId === selectedStatement.customer.id);
-                  if (custObj) {
-                    setSelectedStatement(null);
-                    handleOpenCollectModal(custObj);
-                  }
-                }}
-                disabled={selectedStatement.summary.totalDebt <= 0}
-                className="px-4 py-2 bg-emerald-700 hover:bg-emerald-800 text-white font-bold text-xs rounded-xl shadow-xs transition-colors disabled:opacity-40"
-              >
-                تسجيل دفعة جديدة من الحساب
-              </button>
+            <div className="pt-3 border-t border-slate-200 mt-3 flex flex-wrap justify-between items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
+                {/* 🟡 تحصيل جزئي */}
+                <button
+                  onClick={() => {
+                    const custObj = customers.find((c) => c.customerId === selectedStatement.customer.id);
+                    if (custObj) {
+                      handleOpenCollectModal(custObj);
+                    }
+                  }}
+                  disabled={selectedStatement.summary.totalDebt <= 0}
+                  className="px-4 py-2 bg-amber-500 hover:bg-amber-600 text-slate-950 font-black text-xs rounded-xl shadow-xs transition-all disabled:opacity-40 flex items-center gap-1.5 border border-amber-400"
+                >
+                  <DollarSign className="w-3.5 h-3.5 text-slate-950" />
+                  <span>تحصيل جزئي</span>
+                </button>
+
+                {/* 🟢 تم التحصيل الكامل */}
+                {selectedStatement.summary.totalDebt > 0 && (
+                  <button
+                    onClick={() => {
+                      const custObj = customers.find((c) => c.customerId === selectedStatement.customer.id) || {
+                        customerId: selectedStatement.customer.id,
+                        customerName: selectedStatement.customer.name,
+                        customerPhone: selectedStatement.customer.phone,
+                        address: selectedStatement.customer.address,
+                        totalInvoiced: selectedStatement.summary.totalInvoiced,
+                        totalPaid: selectedStatement.summary.totalPaid,
+                        totalDebt: selectedStatement.summary.totalDebt,
+                        unpaidOrdersCount: selectedStatement.orders.filter((o) => (o.remainingBalance || 0) > 0).length,
+                        paidOrdersCount: selectedStatement.orders.filter((o) => (o.remainingBalance || 0) <= 0).length,
+                      };
+                      setFullCollectCustomer(custObj);
+                      setFullCollectMethod('Cash');
+                      setFullCollectNotes('');
+                      setFullCollectError('');
+                    }}
+                    className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs rounded-xl shadow-xs transition-all flex items-center gap-1.5 border border-emerald-500"
+                  >
+                    <CheckCircle2 className="w-4 h-4" />
+                    <span>تم التحصيل الكامل</span>
+                  </button>
+                )}
+              </div>
 
               <button
                 onClick={() => setSelectedStatement(null)}
@@ -792,6 +957,152 @@ export const AdminDebtsManager: React.FC<AdminDebtsManagerProps> = ({
                 إغلاق
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Full Debt Collection Confirmation Dialog Modal */}
+      {fullCollectCustomer && (
+        <div className="fixed inset-0 bg-slate-900/70 backdrop-blur-xs z-50 flex items-center justify-center p-3 sm:p-4 animate-fadeIn">
+          <div className="bg-white border border-slate-200 rounded-3xl max-w-lg w-full p-5 sm:p-6 text-right shadow-2xl text-slate-800 relative">
+            {/* Header */}
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100 mb-4">
+              <div className="flex items-center gap-2.5">
+                <div className="w-10 h-10 rounded-2xl bg-emerald-100 text-emerald-800 flex items-center justify-center font-black">
+                  <CheckCircle2 className="w-6 h-6" />
+                </div>
+                <div>
+                  <h3 className="font-black text-base sm:text-lg text-slate-900">
+                    تأكيد التحصيل الكامل
+                  </h3>
+                  <p className="text-xs text-slate-500 font-bold">
+                    تسجيل سداد وتصفير كامل مديونية العميل
+                  </p>
+                </div>
+              </div>
+
+              <button
+                onClick={() => setFullCollectCustomer(null)}
+                disabled={fullCollecting}
+                className="p-1.5 text-slate-400 hover:text-slate-700 rounded-xl hover:bg-slate-100 transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Prominent Confirmation Question */}
+            <div className="p-3.5 bg-emerald-50/80 border border-emerald-200 rounded-2xl mb-4 text-emerald-950">
+              <div className="font-black text-sm text-center mb-1">
+                هل تم تحصيل كامل المبلغ المستحق من هذا العميل؟
+              </div>
+              <p className="text-[11px] text-emerald-800 text-center font-medium">
+                سيتم سداد وتحديث جميع الفواتير الآجلة والجزئية تلقائياً وتسجيل الدفعة في سجل المقبوضات.
+              </p>
+            </div>
+
+            {/* Customer & Debt Overview Card */}
+            <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 mb-4 space-y-3">
+              <div className="flex items-center justify-between border-b border-slate-200 pb-2">
+                <span className="text-xs text-slate-500 font-bold">اسم العميل:</span>
+                <span className="font-black text-slate-900 text-sm">{fullCollectCustomer.customerName}</span>
+              </div>
+
+              {fullCollectCustomer.customerPhone && (
+                <div className="flex items-center justify-between border-b border-slate-200 pb-2">
+                  <span className="text-xs text-slate-500 font-bold">رقم الهاتف:</span>
+                  <span className="font-mono font-bold text-slate-700 text-xs">{fullCollectCustomer.customerPhone}</span>
+                </div>
+              )}
+
+              <div className="flex items-center justify-between border-b border-slate-200 pb-2">
+                <span className="text-xs text-red-700 font-black">إجمالي المديونية الحالية:</span>
+                <span className="font-black text-base text-red-700 font-mono">
+                  {(fullCollectCustomer.totalDebt || 0).toLocaleString('ar-EG')} ج.م
+                </span>
+              </div>
+
+              <div className="flex items-center justify-between border-b border-slate-200 pb-2 bg-emerald-100/60 p-2 rounded-xl">
+                <span className="text-xs text-emerald-900 font-black">المبلغ الذي سيتم تحصيله:</span>
+                <span className="font-black text-base text-emerald-900 font-mono">
+                  {(fullCollectCustomer.totalDebt || 0).toLocaleString('ar-EG')} ج.م
+                </span>
+              </div>
+
+              <div className="flex items-center justify-between pt-1">
+                <span className="text-xs text-slate-600 font-bold">المتبقي بعد التحصيل:</span>
+                <span className="font-black text-sm text-emerald-700 font-mono bg-white px-2.5 py-0.5 rounded-lg border border-emerald-200">
+                  0 ج.م (خالص الحساب ✅)
+                </span>
+              </div>
+            </div>
+
+            {/* Payment Method & Notes */}
+            <form onSubmit={handleExecuteFullSettlement} className="space-y-3">
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  طريقة التحصيل
+                </label>
+                <select
+                  value={fullCollectMethod}
+                  onChange={(e) => setFullCollectMethod(e.target.value as any)}
+                  className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs font-bold bg-white focus:outline-hidden focus:border-emerald-700"
+                >
+                  <option value="Cash">نقدًا (كاش مع المندوب / الخزينة)</option>
+                  <option value="VodafoneCash">فودافون كاش / محافظ إلكترونية</option>
+                  <option value="Bank">تحويل بنكي / إنستاباي</option>
+                  <option value="Cheque">شيك بنكي مقبول الدفع</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  ملاحظات إضافية على التحصيل (اختياري)
+                </label>
+                <input
+                  type="text"
+                  placeholder="مثال: تم الاستلام نقدًا بالكامل بالمحل"
+                  value={fullCollectNotes}
+                  onChange={(e) => setFullCollectNotes(e.target.value)}
+                  className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs bg-white focus:outline-hidden focus:border-emerald-700"
+                />
+              </div>
+
+              {fullCollectError && (
+                <div className="p-3 bg-red-50 border border-red-200 text-red-800 text-xs rounded-xl font-bold flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 shrink-0" />
+                  <span>{fullCollectError}</span>
+                </div>
+              )}
+
+              {/* Action Buttons */}
+              <div className="flex justify-end gap-2.5 pt-3 border-t border-slate-100 mt-4">
+                <button
+                  type="button"
+                  onClick={() => setFullCollectCustomer(null)}
+                  disabled={fullCollecting}
+                  className="px-4 py-2.5 rounded-xl border border-slate-300 text-slate-700 font-bold hover:bg-slate-100 transition-colors text-xs"
+                >
+                  إلغاء
+                </button>
+                <button
+                  type="submit"
+                  disabled={fullCollecting}
+                  className="px-6 py-2.5 bg-emerald-700 hover:bg-emerald-800 text-white font-black rounded-xl shadow-md transition-all text-xs disabled:opacity-50 flex items-center gap-2 hover:scale-[1.02] active:scale-[0.98]"
+                >
+                  {fullCollecting ? (
+                    <>
+                      <RefreshCw className="w-4 h-4 animate-spin" />
+                      <span>جاري تنفيذ التحصيل...</span>
+                    </>
+                  ) : (
+                    <>
+                      <CheckCircle2 className="w-4 h-4" />
+                      <span>تأكيد التحصيل الكامل</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

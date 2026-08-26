@@ -11,18 +11,24 @@ import {
 import { Header } from './components/Header';
 import { NotebookCatalog, CartItem } from './components/NotebookCatalog';
 import { CategoriesExploreView } from './components/CategoriesExploreView';
+import { checkIsStoreOpen } from './utils/orderStatus';
 import { BottomSheetCart } from './components/BottomSheetCart';
 import { OrderSuccessModal } from './components/OrderSuccessModal';
 import { CustomerAccount } from './components/CustomerAccount';
 import { BottomNavigation } from './components/BottomNavigation';
 import { AdminSidebar } from './components/AdminSidebar';
 import { AdminFastOrders } from './components/AdminFastOrders';
+import { AdminCustomersManager } from './components/AdminCustomersManager';
 import { AdminDebtsManager } from './components/AdminDebtsManager';
+import { AdminCollectionsReport } from './components/AdminCollectionsReport';
 import { AdminProductsManager } from './components/AdminProductsManager';
 import { AdminDealsManager } from './components/AdminDealsManager';
 import { AdminSettings } from './components/AdminSettings';
 import { AdminOrderEditModal } from './components/AdminOrderEditModal';
 import { PrintReceiptModal } from './components/PrintReceiptModal';
+import { LoginPage } from './components/LoginPage';
+import { RegisterPage } from './components/RegisterPage';
+import { ForgotPasswordPage } from './components/ForgotPasswordPage';
 import { LoginModal } from './components/LoginModal';
 import { AIAssistant } from './components/AIAssistant';
 import {
@@ -40,33 +46,96 @@ import {
 } from 'lucide-react';
 import { apiFetch } from './utils/api';
 
+function parseCurrentRoute(): string {
+  const path = window.location.pathname.replace(/^\/+/, '');
+  const hash = window.location.hash.replace(/^#\/?/, '');
+  return hash || path || 'catalog';
+}
+
 export default function App() {
-  // Default logged in user (Default to Supermarket Customer)
+  // User Authentication State
   const [user, setUser] = useState<User | null>(() => {
     try {
       const saved = localStorage.getItem('halim_user');
       if (saved) return JSON.parse(saved);
     } catch {}
-    return {
-      id: 'usr-cust-1',
-      username: '01011112222',
-      fullName: 'الحاج أحمد فوزي',
-      phone: '01011112222',
-      role: 'customer',
-      storeName: 'سوبر ماركت الأمل',
-      address: 'الإسكندرية - بجوار مسجد القويري بوابة 8',
-    };
+    return null;
   });
 
+  const [isAuthChecking, setIsAuthChecking] = useState(true);
   const [settings, setSettings] = useState<SystemSettings | null>(null);
   const [products, setProducts] = useState<Product[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
   const [deals, setDeals] = useState<DealOffer[]>([]);
   const [bestsellers, setBestsellers] = useState<Product[]>([]);
-  const [activeTab, setActiveTab] = useState<string>('catalog');
+  
+  // Active route / tab with strict initial check
+  const [activeTab, setActiveTabState] = useState<string>(() => {
+    const initial = parseCurrentRoute();
+    if (initial.startsWith('admin')) {
+      try {
+        const saved = localStorage.getItem('halim_user');
+        const parsed = saved ? JSON.parse(saved) : null;
+        if (parsed?.role !== 'admin') {
+          return 'catalog';
+        }
+      } catch {
+        return 'catalog';
+      }
+    }
+    return initial;
+  });
+
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
   const [isMobileAdminSidebarOpen, setIsMobileAdminSidebarOpen] = useState(false);
+
+  // Safe navigation that strictly guards admin routes
+  const navigateTo = useCallback((target: string) => {
+    let clean = target.startsWith('/') ? target.slice(1) : target;
+    clean = clean.replace(/^#\/?/, '');
+    if (!clean) clean = 'catalog';
+
+    // Strict Guard: Prevent any non-admin / customer from navigating to admin routes
+    if (clean.startsWith('admin') && user?.role !== 'admin') {
+      clean = 'catalog';
+      setToast({ message: 'عفواً، الدخول إلى لوحة الإدارة مخصص لحساب الإدارة فقط', type: 'error' });
+      setTimeout(() => setToast(null), 3000);
+    }
+
+    setActiveTabState(clean);
+    try {
+      const newUrl = `/${clean}`;
+      if (window.location.pathname !== newUrl) {
+        window.history.pushState(null, '', newUrl);
+      }
+    } catch {}
+  }, [user?.role]);
+
+  const setActiveTab = (tab: string) => {
+    navigateTo(tab);
+  };
+
+  // Listen for browser Back/Forward navigation with admin route guards
+  useEffect(() => {
+    const handlePopState = () => {
+      let route = parseCurrentRoute();
+      if (route.startsWith('admin') && user?.role !== 'admin') {
+        route = 'catalog';
+        try {
+          window.history.replaceState(null, '', '/catalog');
+        } catch {}
+      }
+      setActiveTabState(route);
+    };
+
+    window.addEventListener('popstate', handlePopState);
+    window.addEventListener('hashchange', handlePopState);
+    return () => {
+      window.removeEventListener('popstate', handlePopState);
+      window.removeEventListener('hashchange', handlePopState);
+    };
+  }, [user?.role]);
 
   // Favorites stored in localStorage
   const [favorites, setFavorites] = useState<string[]>(() => {
@@ -96,6 +165,49 @@ export default function App() {
     setTimeout(() => setToast(null), 3000);
   };
 
+  // Hydrate & Validate Auth Session with Backend on mount
+  useEffect(() => {
+    async function verifySession() {
+      try {
+        const saved = localStorage.getItem('halim_user');
+        if (saved) {
+          const res = await apiFetch('/api/auth/me');
+          if (res.ok) {
+            const data = await res.json();
+            if (data.success && data.user) {
+              setUser(data.user);
+              localStorage.setItem('halim_user', JSON.stringify(data.user));
+            } else {
+              // Session expired or invalid
+              localStorage.removeItem('halim_user');
+              setUser(null);
+            }
+          } else {
+            localStorage.removeItem('halim_user');
+            setUser(null);
+          }
+        } else {
+          setUser(null);
+        }
+      } catch (err) {
+        console.error('Session check error:', err);
+      } finally {
+        setIsAuthChecking(false);
+      }
+    }
+    verifySession();
+  }, []);
+
+  // Strict Admin Route Guard for Non-Admin / Customer Accounts
+  useEffect(() => {
+    if (!isAuthChecking) {
+      if (activeTab.startsWith('admin') && user?.role !== 'admin') {
+        navigateTo('/catalog');
+        showToast('عفواً، الدخول إلى لوحة الإدارة مخصص لحساب الإدارة فقط', 'error');
+      }
+    }
+  }, [activeTab, user?.role, isAuthChecking, navigateTo]);
+
   // Toggle favorite
   const handleToggleFavorite = (productId: string) => {
     setFavorites((prev) => {
@@ -118,7 +230,7 @@ export default function App() {
     } catch {}
     localStorage.removeItem('halim_user');
     setUser(null);
-    setActiveTab('catalog');
+    navigateTo('/login');
     showToast('تم تسجيل الخروج بنجاح');
     fetchData();
   };
@@ -131,14 +243,24 @@ export default function App() {
     setUser(u);
     showToast(`مرحباً بك، ${u.fullName}`);
     if (u.role === 'admin') {
-      setActiveTab('admin-orders');
+      navigateTo('/admin-orders');
     } else {
-      setActiveTab('catalog');
+      navigateTo('/catalog');
     }
     fetchData();
   };
 
   const handleUpdateCartItem = (product: Product, delta: number) => {
+    // Check if store is open for customers
+    const storeStatus = checkIsStoreOpen(settings);
+    if (!storeStatus.isOpen && user?.role !== 'admin' && delta > 0) {
+      showToast(
+        storeStatus.reason || 'عذرًا، تم إغلاق استقبال الطلبات حاليًا. يرجى المحاولة مرة أخرى لاحقًا.',
+        'error'
+      );
+      return;
+    }
+
     setCart((prev) => {
       const existing = prev.find((item) => item.product.id === product.id);
       if (!existing) {
@@ -164,6 +286,16 @@ export default function App() {
   };
 
   const handleSetCartItemQty = (product: Product, qty: number) => {
+    // Check if store is open for customers
+    const storeStatus = checkIsStoreOpen(settings);
+    if (!storeStatus.isOpen && user?.role !== 'admin' && qty > 0) {
+      showToast(
+        storeStatus.reason || 'عذرًا، تم إغلاق استقبال الطلبات حاليًا. يرجى المحاولة مرة أخرى لاحقًا.',
+        'error'
+      );
+      return;
+    }
+
     setCart((prev) => {
       if (qty <= 0) {
         return prev.filter((item) => item.product.id !== product.id);
@@ -200,7 +332,7 @@ export default function App() {
       const catRes = await apiFetch('/api/categories');
       if (catRes.ok) {
         const cData = await catRes.json();
-        setCategories(cData);
+        setCategories(Array.isArray(cData) ? cData : []);
       }
 
       // 3. Products
@@ -208,16 +340,20 @@ export default function App() {
       const prodRes = await apiFetch(`/api/products?role=${pRole}`);
       if (prodRes.ok) {
         const pData = await prodRes.json();
-        setProducts(pData);
+        setProducts(Array.isArray(pData) ? pData : []);
       }
 
       // 4. Orders
-      const orderUrl =
-        user?.role === 'customer' ? `/api/orders?customerId=${user.id}` : '/api/orders';
-      const orderRes = await apiFetch(orderUrl);
-      if (orderRes.ok) {
-        const oData = await orderRes.json();
-        setOrders(oData);
+      if (user) {
+        const orderUrl =
+          user.role === 'customer' ? `/api/orders?customerId=${user.id}` : '/api/orders';
+        const orderRes = await apiFetch(orderUrl);
+        if (orderRes.ok) {
+          const oData = await orderRes.json();
+          setOrders(Array.isArray(oData) ? oData : []);
+        }
+      } else {
+        setOrders([]);
       }
 
       // 5. Deals & Offers
@@ -225,7 +361,7 @@ export default function App() {
         const dealsRes = await apiFetch('/api/deals');
         if (dealsRes.ok) {
           const dData = await dealsRes.json();
-          setDeals(dData);
+          setDeals(Array.isArray(dData) ? dData : []);
         }
       } catch (err) {
         console.error('Failed to load deals:', err);
@@ -236,7 +372,7 @@ export default function App() {
         const bestsellersRes = await apiFetch('/api/products/bestsellers?limit=8');
         if (bestsellersRes.ok) {
           const bData = await bestsellersRes.json();
-          setBestsellers(bData);
+          setBestsellers(Array.isArray(bData) ? bData : []);
         }
       } catch (err) {
         console.error('Failed to load bestsellers:', err);
@@ -248,56 +384,21 @@ export default function App() {
 
   useEffect(() => {
     fetchData();
-
-    // Check if admin login requested via URL parameter or hash
-    const params = new URLSearchParams(window.location.search);
-    if (params.get('login') || params.get('admin') || window.location.hash.includes('admin') || window.location.hash.includes('login')) {
-      setIsLoginOpen(true);
-    }
   }, [fetchData]);
 
   // Compute store status
   const isStoreOpen = useMemo(() => {
-    if (!settings) return true;
-    if (settings.isManualOverrideActive) {
-      return settings.manualOrdersOpen;
-    }
-
-    if (!settings.scheduleEnabled || !settings.weeklySchedule) return true;
-
-    const dayNames: Record<number, string> = {
-      0: 'fri',
-      1: 'sat',
-      2: 'sun',
-      3: 'mon',
-      4: 'tue',
-      5: 'wed',
-      6: 'thu',
-    };
-    const currentDayKey = dayNames[new Date().getDay()];
-    const dayConfig = settings.weeklySchedule.find((d) => d.dayKey === currentDayKey);
-
-    if (!dayConfig || !dayConfig.isOpen) return false;
-
-    const now = new Date();
-    const currentMinutes = now.getHours() * 60 + now.getMinutes();
-
-    const [oH, oM] = dayConfig.openTime.split(':').map(Number);
-    const [cH, cM] = dayConfig.closeTime.split(':').map(Number);
-
-    const openMinutes = oH * 60 + oM;
-    const closeMinutes = cH * 60 + cM;
-
-    return currentMinutes >= openMinutes && currentMinutes <= closeMinutes;
+    return checkIsStoreOpen(settings).isOpen;
   }, [settings]);
 
   // Compute customer outstanding debt
   const customerUnpaidDebt = useMemo(() => {
     if (!user) return 0;
-    const myOrders = orders.filter(
+    const safeOrders = Array.isArray(orders) ? orders : [];
+    const myOrders = safeOrders.filter(
       (o) => (o.customerId === user.id || o.customerPhone === user.phone) && o.status !== 'Cancelled'
     );
-    const totalInvoiced = myOrders.reduce((s, o) => s + o.grandTotal, 0);
+    const totalInvoiced = myOrders.reduce((s, o) => s + (o.grandTotal || 0), 0);
     const totalPaid = myOrders.reduce((s, o) => s + (o.paidAmount || 0), 0);
     return Math.max(0, totalInvoiced - totalPaid);
   }, [user, orders]);
@@ -345,7 +446,10 @@ export default function App() {
     try {
       const res = await apiFetch('/api/settings', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'X-User-Role': user?.role || 'admin',
+        },
         body: JSON.stringify(newSettings),
       });
       if (res.ok) {
@@ -357,7 +461,7 @@ export default function App() {
         fetchData();
       } else {
         const errorData = await res.json().catch(() => null);
-        showToast(errorData?.error || 'فشل حفظ الإعدادات، يرجى المحاولة مرة أخرى 🔴', 'error');
+        showToast(errorData?.error || errorData?.message || 'فشل حفظ الإعدادات، يرجى المحاولة مرة أخرى 🔴', 'error');
       }
     } catch (err) {
       console.error('Error saving settings:', err);
@@ -366,6 +470,15 @@ export default function App() {
   };
 
   const handleReorder = (ord: Order) => {
+    const storeStatus = checkIsStoreOpen(settings);
+    if (!storeStatus.isOpen && user?.role !== 'admin') {
+      showToast(
+        storeStatus.reason || 'عذرًا، تم إغلاق استقبال الطلبات حاليًا. يرجى المحاولة مرة أخرى لاحقًا.',
+        'error'
+      );
+      return;
+    }
+
     const availableItems: CartItem[] = [];
     const unavailableNames: string[] = [];
 
@@ -395,7 +508,76 @@ export default function App() {
     }
   };
 
-  const isAdminView = activeTab.startsWith('admin');
+  const isAdmin = Boolean(user && user.role === 'admin');
+  const isAdminView = isAdmin && activeTab.startsWith('admin');
+
+  // If user is not authenticated, render standalone authentication pages
+  if (!isAuthChecking && !user) {
+    if (activeTab === 'register') {
+      return (
+        <div dir="rtl">
+          {toast && (
+            <div className="fixed top-6 left-1/2 -translate-x-1/2 z-50 animate-bounce no-print">
+              <div
+                className={`px-4 py-2.5 rounded-2xl shadow-xl border text-xs font-bold flex items-center gap-2 ${
+                  toast.type === 'success'
+                    ? 'bg-emerald-800 text-white border-emerald-700'
+                    : 'bg-red-700 text-white border-red-600'
+                }`}
+              >
+                <CheckCircle2 className="w-4 h-4 shrink-0" />
+                <span>{toast.message}</span>
+              </div>
+            </div>
+          )}
+          <RegisterPage onRegisterSuccess={handleLoginSuccess} onNavigate={navigateTo} />
+        </div>
+      );
+    }
+
+    if (activeTab === 'forgot-password') {
+      return (
+        <div dir="rtl">
+          {toast && (
+            <div className="fixed top-6 left-1/2 -translate-x-1/2 z-50 animate-bounce no-print">
+              <div
+                className={`px-4 py-2.5 rounded-2xl shadow-xl border text-xs font-bold flex items-center gap-2 ${
+                  toast.type === 'success'
+                    ? 'bg-emerald-800 text-white border-emerald-700'
+                    : 'bg-red-700 text-white border-red-600'
+                }`}
+              >
+                <CheckCircle2 className="w-4 h-4 shrink-0" />
+                <span>{toast.message}</span>
+              </div>
+            </div>
+          )}
+          <ForgotPasswordPage onNavigate={navigateTo} />
+        </div>
+      );
+    }
+
+    // Default to Standalone LoginPage
+    return (
+      <div dir="rtl">
+        {toast && (
+          <div className="fixed top-6 left-1/2 -translate-x-1/2 z-50 animate-bounce no-print">
+            <div
+              className={`px-4 py-2.5 rounded-2xl shadow-xl border text-xs font-bold flex items-center gap-2 ${
+                toast.type === 'success'
+                  ? 'bg-emerald-800 text-white border-emerald-700'
+                  : 'bg-red-700 text-white border-red-600'
+              }`}
+            >
+              <CheckCircle2 className="w-4 h-4 shrink-0" />
+              <span>{toast.message}</span>
+            </div>
+          </div>
+        )}
+        <LoginPage onLoginSuccess={handleLoginSuccess} onNavigate={navigateTo} />
+      </div>
+    );
+  }
 
   return (
     <div
@@ -454,7 +636,9 @@ export default function App() {
                   <div>
                     <h1 className="text-base sm:text-lg font-black text-white flex items-center gap-2">
                       {activeTab === 'admin-orders' && '📋 إدارة طلبات الجملة'}
+                      {activeTab === 'admin-customers' && '👥 إدارة حسابات العملاء والتجار'}
                       {activeTab === 'admin-debts' && '💰 إدارة التحصيل والمديونيات'}
+                      {activeTab === 'admin-collections' && '💰 التحصيل والمقبوضات'}
                       {activeTab === 'admin-products' && '📦 إدارة المنتجات والتسعير'}
                       {activeTab === 'admin-deals' && '🔥 إدارة العروض والخصومات'}
                       {activeTab === 'admin-settings' && '⚙️ إعدادات النظام والمتجر'}
@@ -500,6 +684,16 @@ export default function App() {
                 />
               )}
 
+              {activeTab === 'admin-customers' && (
+                <AdminCustomersManager
+                  onOpenOrderDetails={(orderId) => {
+                    const ord = orders.find((o) => o.id === orderId);
+                    if (ord) setEditingOrder(ord);
+                  }}
+                  onRefreshData={fetchData}
+                />
+              )}
+
               {activeTab === 'admin-debts' && (
                 <AdminDebtsManager
                   onOpenOrderDetails={(orderId) => {
@@ -508,6 +702,10 @@ export default function App() {
                   }}
                   onRefreshData={fetchData}
                 />
+              )}
+
+              {activeTab === 'admin-collections' && (
+                <AdminCollectionsReport onRefreshGlobal={fetchData} />
               )}
 
               {activeTab === 'admin-products' && (
@@ -519,7 +717,11 @@ export default function App() {
               )}
 
               {activeTab === 'admin-deals' && (
-                <AdminDealsManager onRefreshData={fetchData} />
+                <AdminDealsManager
+                  products={products}
+                  onRefreshData={fetchData}
+                  onRefreshProducts={fetchData}
+                />
               )}
 
               {activeTab === 'admin-settings' && (
@@ -544,6 +746,7 @@ export default function App() {
               unpaidDebt={customerUnpaidDebt}
               onOpenCart={() => setIsCartOpen(true)}
               onOpenLogin={() => setIsLoginOpen(true)}
+              onLogout={handleLogout}
             />
 
             {/* Main Content Area */}
@@ -698,8 +901,8 @@ export default function App() {
         onLoginSuccess={handleLoginSuccess}
       />
 
-      {/* Admin Order Edit Modal */}
-      {editingOrder && (
+      {/* Admin Order Edit Modal (Strict Admin Only) */}
+      {isAdmin && editingOrder && (
         <AdminOrderEditModal
           isOpen={!!editingOrder}
           onClose={() => setEditingOrder(null)}

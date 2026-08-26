@@ -28,16 +28,18 @@ interface AllDealsViewProps {
   onUpdateCartItem: (product: Product, delta: number) => void;
   onSetCartItemQty: (product: Product, quantity: number) => void;
   onBack: () => void;
+  isStoreOpen?: boolean;
 }
 
 export const AllDealsView: React.FC<AllDealsViewProps> = ({
-  deals,
-  products,
+  deals = [],
+  products = [],
   settings,
-  cartItems,
+  cartItems = [],
   onUpdateCartItem,
   onSetCartItemQty,
   onBack,
+  isStoreOpen = true,
 }) => {
   const isPricesHidden = Boolean(settings?.hidePrices);
 
@@ -46,10 +48,12 @@ export const AllDealsView: React.FC<AllDealsViewProps> = ({
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
   const [sortBy, setSortBy] = useState<'discount' | 'price_asc' | 'price_desc' | 'newest'>('discount');
 
+  const safeDeals = Array.isArray(deals) ? deals : [];
+
   // Active Deals
   const activeDeals = useMemo(() => {
-    return deals.filter((d) => d.isActive && !d.isExpired);
-  }, [deals]);
+    return safeDeals.filter((d) => d.isActive && !d.isExpired);
+  }, [safeDeals]);
 
   // Categories present in deals
   const categories = useMemo(() => {
@@ -284,7 +288,15 @@ export const AllDealsView: React.FC<AllDealsViewProps> = ({
               stock: 100,
             };
 
-            const cartItem = cartItems.find((ci) => ci.product.id === matchedProduct.id);
+            const effectiveProduct: Product = {
+              ...matchedProduct,
+              price: isPricesHidden ? 0 : deal.offerPrice,
+              name: deal.productName || matchedProduct.name,
+              image: deal.productImage || matchedProduct.image,
+              unit: deal.productUnit || matchedProduct.unit,
+            };
+
+            const cartItem = cartItems.find((ci) => ci.product.id === effectiveProduct.id);
             const currentQty = cartItem ? cartItem.quantity : 0;
 
             return (
@@ -383,9 +395,14 @@ export const AllDealsView: React.FC<AllDealsViewProps> = ({
 
                     {/* Add to Cart Controls */}
                     <div className="mt-3">
-                      {currentQty === 0 ? (
+                      {!isStoreOpen ? (
+                        <div className="w-full py-2.5 px-3 bg-red-50 border border-red-200 text-red-700 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 shadow-2xs">
+                          <Lock className="w-4 h-4" />
+                          <span>مغلق</span>
+                        </div>
+                      ) : currentQty === 0 ? (
                         <button
-                          onClick={() => onUpdateCartItem(matchedProduct, 1)}
+                          onClick={() => onUpdateCartItem(effectiveProduct, 1)}
                           className="w-full py-2.5 px-3 bg-emerald-800 hover:bg-emerald-900 active:scale-[0.98] text-white rounded-xl text-xs font-black flex items-center justify-center gap-1.5 shadow-sm transition-all"
                         >
                           <Plus className="w-4 h-4" />
@@ -394,7 +411,7 @@ export const AllDealsView: React.FC<AllDealsViewProps> = ({
                       ) : (
                         <div className="flex items-center justify-between bg-emerald-50 border border-emerald-300 rounded-xl p-1">
                           <button
-                            onClick={() => onUpdateCartItem(matchedProduct, -1)}
+                            onClick={() => onUpdateCartItem(effectiveProduct, -1)}
                             className="w-8 h-8 bg-white hover:bg-emerald-100 text-emerald-800 border border-emerald-200 rounded-lg flex items-center justify-center font-black transition-colors"
                           >
                             <Minus className="w-4 h-4" />
@@ -405,12 +422,12 @@ export const AllDealsView: React.FC<AllDealsViewProps> = ({
                               {currentQty}
                             </span>
                             <span className="text-[9px] text-emerald-700 font-bold block">
-                              {deal.productUnit || matchedProduct.unit} في السلة
+                              {deal.productUnit || effectiveProduct.unit} في السلة
                             </span>
                           </div>
 
                           <button
-                            onClick={() => onUpdateCartItem(matchedProduct, 1)}
+                            onClick={() => onUpdateCartItem(effectiveProduct, 1)}
                             className="w-8 h-8 bg-emerald-800 hover:bg-emerald-900 text-white rounded-lg flex items-center justify-center font-black transition-colors"
                           >
                             <Plus className="w-4 h-4" />

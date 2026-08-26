@@ -1,5 +1,6 @@
-import React, { useState } from 'react';
-import { Order, OrderStatus, SystemSettings } from '../types';
+import React, { useState, useEffect } from 'react';
+import { Order, OrderStatus, SystemSettings, FinancialSummary } from '../types';
+import { apiFetch } from '../utils/api';
 import {
   ShieldCheck,
   Lock,
@@ -16,6 +17,10 @@ import {
   Calendar,
   AlertCircle,
   FileText,
+  DollarSign,
+  TrendingUp,
+  Wallet,
+  ArrowUpRight,
 } from 'lucide-react';
 
 interface AdminDashboardProps {
@@ -26,26 +31,53 @@ interface AdminDashboardProps {
   onOpenPrintModal: (order: Order) => void;
   onUpdateStatus: (orderId: string, status: OrderStatus) => void;
   onRefreshData: () => void;
+  onNavigateToTab?: (tab: string) => void;
 }
 
 export const AdminDashboard: React.FC<AdminDashboardProps> = ({
-  orders,
+  orders = [],
   settings,
   onToggleOrdersOpen,
   onOpenEditModal,
   onOpenPrintModal,
   onUpdateStatus,
   onRefreshData,
+  onNavigateToTab,
 }) => {
   const [filterStatus, setFilterStatus] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState('');
+  const [finSummary, setFinSummary] = useState<FinancialSummary | null>(null);
+  const [finLoading, setFinLoading] = useState(false);
+
+  const fetchFinancialStats = async () => {
+    try {
+      setFinLoading(true);
+      const res = await apiFetch('/api/debts');
+      if (res.ok) {
+        const json = await res.json();
+        if (json.summary) {
+          setFinSummary(json.summary);
+        }
+      }
+    } catch (err) {
+      console.error('Error fetching financial summary in AdminDashboard:', err);
+    } finally {
+      setFinLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchFinancialStats();
+  }, [orders]);
 
   const isOrdersOpen = settings?.isManualOverrideActive
     ? settings.manualOrdersOpen
     : true;
 
+  const safeOrders = Array.isArray(orders) ? orders : [];
+
   // Filter orders
-  const filteredOrders = orders.filter((ord) => {
+  const filteredOrders = safeOrders.filter((ord) => {
     if (filterStatus !== 'all') {
       if (filterStatus === 'Pending' && ord.status !== 'Pending' && ord.status !== 'New') return false;
       if (filterStatus !== 'Pending' && ord.status !== filterStatus) return false;
@@ -53,22 +85,22 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase().trim();
       return (
-        ord.orderNumber.toLowerCase().includes(q) ||
-        ord.customerName.toLowerCase().includes(q) ||
-        ord.customerPhone.includes(q)
+        (ord.orderNumber || '').toLowerCase().includes(q) ||
+        (ord.customerName || '').toLowerCase().includes(q) ||
+        (ord.customerPhone || '').includes(q)
       );
     }
     return true;
   });
 
-  // Calculate stats
-  const pendingCount = orders.filter((o) => o.status === 'Pending' || o.status === 'New').length;
-  const confirmedCount = orders.filter((o) => o.status === 'Confirmed').length;
-  const preparingCount = orders.filter((o) => o.status === 'Preparing').length;
-  const totalDelivered = orders.filter((o) => o.status === 'Delivered').length;
-  const totalSales = orders
+  // Calculate order counts
+  const pendingCount = safeOrders.filter((o) => o.status === 'Pending' || o.status === 'New').length;
+  const confirmedCount = safeOrders.filter((o) => o.status === 'Confirmed').length;
+  const preparingCount = safeOrders.filter((o) => o.status === 'Preparing').length;
+  const totalDelivered = safeOrders.filter((o) => o.status === 'Delivered').length;
+  const totalSales = finSummary?.totalSales ?? safeOrders
     .filter((o) => o.status !== 'Cancelled')
-    .reduce((sum, o) => sum + o.grandTotal, 0);
+    .reduce((sum, o) => sum + (o.grandTotal || 0), 0);
 
   const getStatusBadge = (status: OrderStatus | string) => {
     switch (status) {
@@ -169,7 +201,88 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         </div>
       </div>
 
-      {/* Quick Summary Metrics Cards */}
+      {/* Financial Performance Overview (Server-Authoritative) */}
+      <div className="bg-gradient-to-r from-slate-900 to-slate-800 text-white rounded-2xl p-4 shadow-sm border border-slate-700/60">
+        <div className="flex items-center justify-between mb-3 pb-2 border-b border-slate-700/80">
+          <div className="flex items-center gap-2">
+            <div className="w-7 h-7 rounded-lg bg-emerald-500/20 text-emerald-400 flex items-center justify-center font-bold text-xs">
+              💰
+            </div>
+            <div>
+              <h3 className="text-xs font-black text-white">مؤشرات الخزينة والتحصيل الفعلي</h3>
+              <span className="text-[10px] text-slate-400">محدثة لحظيًا بناءً على سجل المدفوعات الحقيقي</span>
+            </div>
+          </div>
+
+          {onNavigateToTab && (
+            <button
+              onClick={() => onNavigateToTab('admin-collections')}
+              className="text-[11px] font-bold text-amber-400 hover:text-amber-300 flex items-center gap-1 bg-slate-800/80 hover:bg-slate-800 px-2.5 py-1 rounded-lg border border-slate-700 transition-colors cursor-pointer"
+            >
+              <span>فتح تقرير التحصيل الكامل</span>
+              <ArrowUpRight className="w-3 h-3" />
+            </button>
+          )}
+        </div>
+
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5">
+          {/* Total Sales */}
+          <div className="bg-slate-800/90 rounded-xl p-2.5 border border-slate-700/70">
+            <span className="text-[10px] text-slate-400 font-bold block mb-0.5">📊 إجمالي المبيعات</span>
+            <div className="text-sm md:text-base font-black text-white">
+              {(finSummary?.totalSales ?? totalSales).toLocaleString('ar-EG')}{' '}
+              <span className="text-[9px] text-slate-400 font-normal">ج.م</span>
+            </div>
+          </div>
+
+          {/* Today Collection */}
+          <div className="bg-emerald-950/40 rounded-xl p-2.5 border border-emerald-800/60">
+            <span className="text-[10px] text-emerald-400 font-bold block mb-0.5">💰 تحصيل اليوم</span>
+            <div className="text-sm md:text-base font-black text-emerald-300">
+              {(finSummary?.collectedToday || 0).toLocaleString('ar-EG')}{' '}
+              <span className="text-[9px] text-emerald-400/80 font-normal">ج.م</span>
+            </div>
+          </div>
+
+          {/* This Week Collection */}
+          <div className="bg-blue-950/40 rounded-xl p-2.5 border border-blue-800/60">
+            <span className="text-[10px] text-blue-400 font-bold block mb-0.5">📅 تحصيل هذا الأسبوع</span>
+            <div className="text-sm md:text-base font-black text-blue-300">
+              {(finSummary?.collectedThisWeek || 0).toLocaleString('ar-EG')}{' '}
+              <span className="text-[9px] text-blue-400/80 font-normal">ج.م</span>
+            </div>
+          </div>
+
+          {/* This Month Collection */}
+          <div className="bg-indigo-950/40 rounded-xl p-2.5 border border-indigo-800/60">
+            <span className="text-[10px] text-indigo-400 font-bold block mb-0.5">🗓️ تحصيل هذا الشهر</span>
+            <div className="text-sm md:text-base font-black text-indigo-300">
+              {(finSummary?.collectedThisMonth || 0).toLocaleString('ar-EG')}{' '}
+              <span className="text-[9px] text-indigo-400/80 font-normal">ج.م</span>
+            </div>
+          </div>
+
+          {/* This Year Collection */}
+          <div className="bg-purple-950/40 rounded-xl p-2.5 border border-purple-800/60">
+            <span className="text-[10px] text-purple-400 font-bold block mb-0.5">📆 تحصيل هذه السنة</span>
+            <div className="text-sm md:text-base font-black text-purple-300">
+              {(finSummary?.collectedThisYear || 0).toLocaleString('ar-EG')}{' '}
+              <span className="text-[9px] text-purple-400/80 font-normal">ج.م</span>
+            </div>
+          </div>
+
+          {/* Total Outstanding Debt */}
+          <div className="bg-red-950/40 rounded-xl p-2.5 border border-red-800/60">
+            <span className="text-[10px] text-red-400 font-bold block mb-0.5">⚠️ إجمالي المديونيات</span>
+            <div className="text-sm md:text-base font-black text-red-300">
+              {(finSummary?.totalOutstandingDebt || 0).toLocaleString('ar-EG')}{' '}
+              <span className="text-[9px] text-red-400/80 font-normal">ج.م</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Quick Summary Metrics Cards (Order Pipeline) */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
         <div className="bg-white border border-amber-200 rounded-xl p-3 shadow-xs relative overflow-hidden">
           <div className="text-[11px] text-amber-800 font-medium flex items-center justify-between">
@@ -192,10 +305,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         </div>
 
         <div className="bg-white border border-emerald-200 rounded-xl p-3 shadow-xs">
-          <div className="text-[11px] text-emerald-700 font-medium">إجمالي المبيعات</div>
-          <div className="text-xl font-black text-emerald-800 mt-0.5 font-mono">
-            {totalSales.toLocaleString('ar-EG')} <span className="text-xs font-bold">ج.م</span>
-          </div>
+          <div className="text-[11px] text-emerald-700 font-medium">تم التسليم بنجاح ✅</div>
+          <div className="text-xl font-black text-emerald-900 mt-0.5 font-mono">{totalDelivered}</div>
         </div>
       </div>
 

@@ -61,25 +61,27 @@ export const AIAssistant: React.FC<AIAssistantProps> = ({
   const workingHours = settings?.supportWorkingHours || 'يومياً من 8:00 صباحاً حتى 10:00 مساءً';
   const repName = settings?.salesRepName || 'محمد فوزي';
 
+  const safeOrders = Array.isArray(orders) ? orders : [];
+
   // Calculate user's current debt
   const userDebt = React.useMemo(() => {
     if (!user) return 0;
-    const userOrders = orders.filter(
+    const userOrders = safeOrders.filter(
       (o) => (o.customerId === user.id || o.customerPhone === user.phone) && o.status !== 'Cancelled'
     );
-    const totalInvoiced = userOrders.reduce((s, o) => s + o.grandTotal, 0);
+    const totalInvoiced = userOrders.reduce((s, o) => s + (o.grandTotal || 0), 0);
     const totalPaid = userOrders.reduce((s, o) => s + (o.paidAmount || 0), 0);
     return Math.max(0, totalInvoiced - totalPaid);
-  }, [user, orders]);
+  }, [user, safeOrders]);
 
   // Latest order
   const latestOrder = React.useMemo(() => {
     if (!user) return null;
-    const userOrders = orders.filter(
+    const userOrders = safeOrders.filter(
       (o) => (o.customerId === user.id || o.customerPhone === user.phone)
     );
     return userOrders.length > 0 ? userOrders[0] : null;
-  }, [user, orders]);
+  }, [user, safeOrders]);
 
   const defaultGreeting: Message = {
     id: 'greet_1',

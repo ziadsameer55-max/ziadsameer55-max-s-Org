@@ -9,9 +9,24 @@ export interface User {
   storeName?: string;
   address?: string;
   creditBalance?: number;
-  status?: 'active' | 'suspended';
+  status?: 'active' | 'suspended' | 'disabled';
   token?: string;
   createdAt?: string;
+}
+
+export interface AdminCustomerRecord {
+  id: string;
+  username: string;
+  fullName: string;
+  storeName: string;
+  phone: string;
+  address?: string;
+  ordersCount: number;
+  totalPurchases: number;
+  currentDebt: number;
+  totalPaid: number;
+  createdAt: string;
+  status: 'active' | 'disabled';
 }
 
 export type ProductStatus = 'open' | 'locked' | 'hidden';
@@ -55,7 +70,7 @@ export type OrderStatus =
 
 export type PaymentStatus = 'Paid' | 'Partial' | 'Unpaid';
 
-export type PaymentMethod = 'Cash' | 'Bank' | 'VodafoneCash' | 'Check' | 'Other';
+export type PaymentMethod = 'Cash' | 'Bank' | 'VodafoneCash' | 'Check' | 'Cheque' | 'Other';
 
 export interface PaymentTransaction {
   id: string;
@@ -90,12 +105,54 @@ export interface CustomerDebtSummary {
 export interface FinancialSummary {
   totalSales: number;
   totalCollected: number;
+  collectedToday?: number;
+  collectedThisWeek?: number;
+  collectedThisMonth?: number;
+  collectedThisYear?: number;
   totalOutstandingDebt: number;
   debtorsCount: number;
   totalOrdersCount: number;
   paidOrdersCount: number;
   partialOrdersCount: number;
   unpaidOrdersCount: number;
+}
+
+export type CollectionPeriod =
+  | 'today'
+  | 'yesterday'
+  | 'this_week'
+  | 'last_week'
+  | 'this_month'
+  | 'last_month'
+  | 'this_year'
+  | 'last_year'
+  | 'custom';
+
+export interface CollectionsReportData {
+  summary: {
+    today: number;
+    thisWeek: number;
+    thisMonth: number;
+    thisYear: number;
+    totalOutstandingDebt: number;
+    totalSales: number;
+    totalCollectedAllTime: number;
+  };
+  periodSummary: {
+    period: CollectionPeriod;
+    startDate?: string;
+    endDate?: string;
+    totalCollected: number;
+    transactionsCount: number;
+    byMethod: {
+      Cash: number;
+      Bank: number;
+      VodafoneCash: number;
+      Cheque: number;
+      Other: number;
+    };
+  };
+  payments: PaymentTransaction[];
 }
 
 export interface CustomerStatement {
@@ -158,7 +215,16 @@ export interface Order {
   payments?: PaymentTransaction[];
 }
 
-export type PaperSize = '58mm' | '80mm' | '57mm' | '76mm' | 'A4' | 'A5';
+export type PaperSize = '58mm' | '80mm' | '57mm' | '76mm' | 'A4' | 'A5' | 'custom';
+
+export interface PrintFontSizes {
+  header: number; // e.g. 13 - 22px
+  meta: number; // e.g. 10 - 15px
+  tableHeader: number; // e.g. 10 - 14px
+  tableRows: number; // e.g. 10 - 14px
+  summary: number; // e.g. 11 - 16px
+  footer: number; // e.g. 9 - 13px
+}
 
 export interface DaySchedule {
   dayName: string; // السبت, الأحد, ...
@@ -177,6 +243,9 @@ export interface SystemSettings {
   address: string;
   receiptFooter: string;
   paperSize: PaperSize;
+  customWidthMm?: number; // Custom thermal width in mm (e.g. 72mm, 100mm)
+  customHeightMm?: number; // Custom thermal/paper height in mm (optional)
+  printFontSizes?: PrintFontSizes; // Fine-grained font sizes for each receipt element
   
   // Ordering manual controls
   isManualOverrideActive: boolean; // if true, manual status wins
@@ -193,8 +262,10 @@ export interface SystemSettings {
   preventOutOfStockSale: boolean;
   lowStockThreshold?: number; // default 5 units for supply alerts
 
-  // Invoice & Receipt Debt Breakdown Display
+  // Invoice & Receipt Debt Breakdown & Styling Controls
   showPreviousDebtOnReceipt?: boolean; // إظهار المديونية السابقة والإجمالي المستحق في الفاتورة المطبوعة
+  showHeaderLogo?: boolean; // إظهار شعار وترويسة الشركة في الطباعة
+  showItemsBorder?: boolean; // إظهار خطوط وحدود جدول الأصناف في الطباعة
 
   // AI Assistant & Support settings
   aiAssistantEnabled?: boolean;

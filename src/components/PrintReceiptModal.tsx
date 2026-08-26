@@ -1,6 +1,21 @@
 import React, { useRef, useState, useEffect } from 'react';
-import { Order, SystemSettings } from '../types';
-import { Printer, X, FileText, Receipt, CheckCircle, Store, Phone, Calendar, User as UserIcon, Wallet, ToggleLeft, ToggleRight } from 'lucide-react';
+import { Order, SystemSettings, PaperSize } from '../types';
+import logoImg from '../assets/images/alhalim_logo_1787745934656.jpg';
+import {
+  Printer,
+  X,
+  FileText,
+  Receipt,
+  CheckCircle,
+  Store,
+  Phone,
+  Calendar,
+  User as UserIcon,
+  Wallet,
+  ToggleLeft,
+  ToggleRight,
+  Layers,
+} from 'lucide-react';
 import { printHtmlContent } from '../utils/printHelper';
 import { apiFetch } from '../utils/api';
 
@@ -19,7 +34,9 @@ export const PrintReceiptModal: React.FC<PrintReceiptModalProps> = ({
   settings,
   isAdmin = true,
 }) => {
-  const [printFormat, setPrintFormat] = useState<'80mm' | 'A4'>('80mm');
+  const [selectedPaperSize, setSelectedPaperSize] = useState<PaperSize>(
+    settings?.paperSize || '80mm'
+  );
   const [showDebtSection, setShowDebtSection] = useState<boolean>(
     isAdmin || (settings?.showPreviousDebtOnReceipt ?? true)
   );
@@ -27,6 +44,12 @@ export const PrintReceiptModal: React.FC<PrintReceiptModalProps> = ({
     order.previousDebt !== undefined ? order.previousDebt : null
   );
   const printableRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (settings?.paperSize) {
+      setSelectedPaperSize(settings.paperSize);
+    }
+  }, [settings?.paperSize]);
 
   // Fetch verified previous debt from database if not already present
   useEffect(() => {
@@ -46,7 +69,6 @@ export const PrintReceiptModal: React.FC<PrintReceiptModalProps> = ({
         if (res.ok) {
           const data = await res.json();
           if (isMounted && data && typeof data.totalDebt === 'number') {
-            // Subtract current order if included in statement total debt
             const prev = Math.max(0, data.totalDebt - (order.grandTotal - (order.paidAmount || 0)));
             setLivePreviousDebt(prev);
           }
@@ -68,7 +90,10 @@ export const PrintReceiptModal: React.FC<PrintReceiptModalProps> = ({
     if (printableRef.current) {
       printHtmlContent(printableRef.current.innerHTML, {
         title: `فاتورة #${order.orderNumber}`,
-        paperSize: printFormat === '80mm' ? '80mm' : 'A4',
+        paperSize: selectedPaperSize,
+        customWidthMm: settings?.customWidthMm,
+        customHeightMm: settings?.customHeightMm,
+        fontSizes: settings?.printFontSizes,
       });
     } else {
       window.print();
@@ -82,6 +107,15 @@ export const PrintReceiptModal: React.FC<PrintReceiptModalProps> = ({
   const remainingFinal = order.finalRemainingWithDebt !== undefined
     ? order.finalRemainingWithDebt
     : Math.max(0, totalDue - paid);
+
+  const activeFontSizes = settings?.printFontSizes || {
+    header: selectedPaperSize === '58mm' ? 14 : 16,
+    meta: selectedPaperSize === '58mm' ? 10 : 11,
+    tableHeader: selectedPaperSize === '58mm' ? 10 : 11,
+    tableRows: selectedPaperSize === '58mm' ? 10 : 11,
+    summary: selectedPaperSize === '58mm' ? 11 : 12,
+    footer: selectedPaperSize === '58mm' ? 9 : 10,
+  };
 
   return (
     <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 overflow-y-auto" dir="rtl">
@@ -123,35 +157,29 @@ export const PrintReceiptModal: React.FC<PrintReceiptModalProps> = ({
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
-            {/* Format Toggle */}
+          <div className="flex items-center gap-2 flex-wrap">
+            {/* Paper Size Quick Selector */}
             <div className="flex items-center bg-slate-100 p-0.5 rounded-xl text-xs font-bold">
-              <button
-                onClick={() => setPrintFormat('80mm')}
-                className={`px-2.5 py-1 rounded-lg transition-colors flex items-center gap-1 ${
-                  printFormat === '80mm'
-                    ? 'bg-white text-emerald-900 shadow-2xs'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                <Receipt className="w-3.5 h-3.5" />
-                <span>حراري 80mm</span>
-              </button>
-              <button
-                onClick={() => setPrintFormat('A4')}
-                className={`px-2.5 py-1 rounded-lg transition-colors flex items-center gap-1 ${
-                  printFormat === 'A4'
-                    ? 'bg-white text-emerald-900 shadow-2xs'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                <FileText className="w-3.5 h-3.5" />
-                <span>ورق A4 رسمي</span>
-              </button>
+              {(['58mm', '80mm', 'A4'] as PaperSize[]).map((size) => (
+                <button
+                  key={size}
+                  type="button"
+                  onClick={() => setSelectedPaperSize(size)}
+                  className={`px-2.5 py-1 rounded-lg transition-colors flex items-center gap-1 ${
+                    selectedPaperSize === size
+                      ? 'bg-white text-emerald-900 shadow-2xs font-black'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  <Receipt className="w-3.5 h-3.5" />
+                  <span>{size}</span>
+                </button>
+              ))}
             </div>
 
             {/* Toggle Debt Breakdown */}
             <button
+              type="button"
               onClick={() => setShowDebtSection(!showDebtSection)}
               className={`px-2.5 py-1.5 rounded-xl border text-xs font-bold flex items-center gap-1 transition-all ${
                 showDebtSection
@@ -165,16 +193,18 @@ export const PrintReceiptModal: React.FC<PrintReceiptModalProps> = ({
             </button>
 
             <button
+              type="button"
               onClick={handlePrint}
-              className="px-3.5 py-1.5 rounded-xl bg-emerald-800 hover:bg-emerald-900 text-white font-black text-xs flex items-center gap-1.5 shadow-xs transition-colors"
+              className="px-3.5 py-1.5 rounded-xl bg-emerald-800 hover:bg-emerald-900 text-white font-black text-xs flex items-center gap-1.5 shadow-xs transition-colors cursor-pointer"
             >
               <Printer className="w-4 h-4" />
               <span>طباعة 🖨️</span>
             </button>
 
             <button
+              type="button"
               onClick={onClose}
-              className="w-8 h-8 rounded-full bg-slate-100 text-slate-500 hover:text-slate-800 flex items-center justify-center"
+              className="w-8 h-8 rounded-full bg-slate-100 text-slate-500 hover:text-slate-800 flex items-center justify-center cursor-pointer"
             >
               <X className="w-4 h-4" />
             </button>
@@ -187,23 +217,53 @@ export const PrintReceiptModal: React.FC<PrintReceiptModalProps> = ({
             ref={printableRef}
             id="printable-invoice"
             className={`bg-white border border-slate-300 p-4 text-black shadow-sm font-sans transition-all ${
-              printFormat === '80mm' ? 'w-[320px] text-xs' : 'w-full max-w-[650px] text-sm'
+              selectedPaperSize === '58mm' || selectedPaperSize === '57mm'
+                ? 'w-[260px]'
+                : selectedPaperSize === '76mm'
+                ? 'w-[300px]'
+                : selectedPaperSize === '80mm'
+                ? 'w-[330px]'
+                : 'w-full max-w-[650px]'
             }`}
             style={{ fontFamily: "'Cairo', sans-serif" }}
           >
             {/* Header */}
             <div className="text-center pb-2 border-b-2 border-black border-dashed">
-              <h2 className="text-base font-black tracking-tight">شركة الحليم للتجارة والتوزيع</h2>
-              <p className="text-[11px] font-bold text-slate-800">
-                {settings?.activityDescription || 'توريدات المواد الغذائية والمشروبات بالجملة'}
+              {settings?.showHeaderLogo !== false && (
+                <div className="flex justify-center mb-1.5">
+                  <img
+                    src={logoImg}
+                    alt="شركة الحليم"
+                    referrerPolicy="no-referrer"
+                    className="w-12 h-12 object-contain mx-auto"
+                  />
+                </div>
+              )}
+              <h2
+                style={{ fontSize: `${activeFontSizes.header}px` }}
+                className="font-black tracking-tight print-header-title text-slate-950"
+              >
+                {settings?.companyName || 'شركة الحليم للتجارة والتوزيع'}
+              </h2>
+              <p
+                style={{ fontSize: `${activeFontSizes.meta}px` }}
+                className="font-bold text-slate-800 print-meta-text"
+              >
+                {settings?.managerName || 'إدارة الحاج فوزي عبد الحليم'} | المندوب: {order.salesRep || settings?.salesRepName || 'محمد فوزي'}
               </p>
-              <p className="text-[10px] text-slate-700">
+              <p
+                style={{ fontSize: `${activeFontSizes.meta - 1}px` }}
+                className="text-slate-700 print-meta-text"
+              >
                 {settings?.address || 'محافظة الإسكندرية - بجوار مسجد القويري - بوابة 8'} • هاتف: {settings?.phonePrimary || '01000000000'}
               </p>
             </div>
 
             {/* Order & Customer Metadata */}
-            <div className="py-2 border-b border-black border-dashed space-y-1 text-[11px]">
+            <div
+              style={{ fontSize: `${activeFontSizes.meta}px` }}
+              className="py-2 border-b border-black border-dashed space-y-1 print-meta-text"
+            >
               <div className="flex justify-between font-bold">
                 <span>رقم الفاتورة:</span>
                 <span className="font-mono">#{order.orderNumber}</span>
@@ -236,26 +296,37 @@ export const PrintReceiptModal: React.FC<PrintReceiptModalProps> = ({
 
             {/* Items Table */}
             <div className="py-2">
-              <table className="w-full text-right text-[11px]">
+              <table
+                className={`w-full text-right ${
+                  settings?.showItemsBorder !== false ? 'border border-slate-300' : ''
+                }`}
+              >
                 <thead>
-                  <tr className="border-b-2 border-black font-black">
-                    <th className="py-1">الصنف</th>
-                    <th className="py-1 text-center">الكمية</th>
-                    <th className="py-1 text-center">السعر</th>
-                    <th className="py-1 text-left">الإجمالي</th>
+                  <tr
+                    style={{ fontSize: `${activeFontSizes.tableHeader}px` }}
+                    className="border-b-2 border-black font-black print-th-text bg-slate-50"
+                  >
+                    <th className="py-1 px-1">الصنف</th>
+                    <th className="py-1 px-1 text-center">الكمية</th>
+                    <th className="py-1 px-1 text-center">السعر</th>
+                    <th className="py-1 px-1 text-left">الإجمالي</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-200">
                   {(order.items || []).map((item, idx) => (
-                    <tr key={idx} className="py-1">
-                      <td className="py-1 font-bold">{item.productName}</td>
-                      <td className="py-1 text-center font-mono font-bold">
+                    <tr
+                      key={idx}
+                      style={{ fontSize: `${activeFontSizes.tableRows}px` }}
+                      className="py-1 print-tr-text"
+                    >
+                      <td className="py-1 px-1 font-bold">{item.productName}</td>
+                      <td className="py-1 px-1 text-center font-mono font-bold">
                         {item.quantity} {item.unit || 'كرتونة'}
                       </td>
-                      <td className="py-1 text-center font-mono">
+                      <td className="py-1 px-1 text-center font-mono">
                         {item.unitPrice} ج
                       </td>
-                      <td className="py-1 text-left font-mono font-bold">
+                      <td className="py-1 px-1 text-left font-mono font-bold">
                         {item.totalPrice.toLocaleString('ar-EG')} ج
                       </td>
                     </tr>
@@ -265,7 +336,10 @@ export const PrintReceiptModal: React.FC<PrintReceiptModalProps> = ({
             </div>
 
             {/* Summary of Items */}
-            <div className="border-t-2 border-black border-dashed pt-2 pb-1 text-[11px]">
+            <div
+              style={{ fontSize: `${activeFontSizes.summary}px` }}
+              className="border-t-2 border-black border-dashed pt-2 pb-1 print-summary-text"
+            >
               <div className="flex justify-between font-medium">
                 <span>إجمالي الأصناف:</span>
                 <span className="font-bold">
@@ -276,7 +350,10 @@ export const PrintReceiptModal: React.FC<PrintReceiptModalProps> = ({
 
             {/* Debt & Financial Breakdown Section (Strictly Structured) */}
             {showDebtSection ? (
-              <div className="border-t-2 border-black border-dashed pt-2 text-[11px] space-y-1">
+              <div
+                style={{ fontSize: `${activeFontSizes.summary}px` }}
+                className="border-t-2 border-black border-dashed pt-2 space-y-1 print-summary-text"
+              >
                 {/* Previous Debt & Current Invoice */}
                 <div className="flex justify-between py-0.5">
                   <span className="font-bold text-slate-800">المديونية السابقة:</span>
@@ -291,7 +368,7 @@ export const PrintReceiptModal: React.FC<PrintReceiptModalProps> = ({
                 <div className="border-t-2 border-black my-1"></div>
 
                 {/* Total Due & Paid */}
-                <div className="flex justify-between py-0.5 font-black text-xs">
+                <div className="flex justify-between py-0.5 font-black text-xs sm:text-sm">
                   <span>الإجمالي المستحق:</span>
                   <span className="font-mono">{totalDue.toLocaleString('ar-EG')} ج.م</span>
                 </div>
@@ -304,7 +381,7 @@ export const PrintReceiptModal: React.FC<PrintReceiptModalProps> = ({
                 <div className="border-t-2 border-black my-1"></div>
 
                 {/* Remaining Total */}
-                <div className="flex justify-between py-0.5 font-black text-xs sm:text-sm text-red-700">
+                <div className="flex justify-between py-0.5 font-black text-xs sm:text-base text-red-700">
                   <span>المتبقي:</span>
                   <span className="font-mono">{remainingFinal.toLocaleString('ar-EG')} ج.م</span>
                 </div>
@@ -312,7 +389,10 @@ export const PrintReceiptModal: React.FC<PrintReceiptModalProps> = ({
               </div>
             ) : (
               /* Standard Single-Invoice View */
-              <div className="border-t-2 border-black border-dashed pt-2 space-y-1 text-[11px]">
+              <div
+                style={{ fontSize: `${activeFontSizes.summary}px` }}
+                className="border-t-2 border-black border-dashed pt-2 space-y-1 print-summary-text"
+              >
                 <div className="flex justify-between font-black text-sm border-t border-slate-300 pt-1">
                   <span>إجمالي الفاتورة الحالية:</span>
                   <span className="font-mono">{order.grandTotal.toLocaleString('ar-EG')} جنيه</span>
@@ -329,7 +409,10 @@ export const PrintReceiptModal: React.FC<PrintReceiptModalProps> = ({
             )}
 
             {/* Footer */}
-            <div className="mt-3 pt-2 border-t border-black border-dashed text-center text-[10px] text-slate-700 space-y-0.5">
+            <div
+              style={{ fontSize: `${activeFontSizes.footer}px` }}
+              className="mt-3 pt-2 border-t border-black border-dashed text-center text-slate-700 space-y-0.5 print-footer-text"
+            >
               <p className="font-bold">
                 {settings?.receiptFooter || 'شكراً لتعاملكم مع شركة الحليم للتجارة والتوزيع'}
               </p>
@@ -345,4 +428,3 @@ export const PrintReceiptModal: React.FC<PrintReceiptModalProps> = ({
     </div>
   );
 };
-
