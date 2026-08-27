@@ -55,9 +55,10 @@ export const CartCheckoutView: React.FC<CartCheckoutViewProps> = ({
 
   if (!isOpen) return null;
 
+  const isPricesHidden = user?.role !== 'admin' && Boolean(settings?.hidePrices);
   const totalItemsCount = cart.length;
   const totalQuantity = cart.reduce((sum, item) => sum + item.quantity, 0);
-  const subtotal = cart.reduce((sum, item) => sum + item.product.price * item.quantity, 0);
+  const subtotal = isPricesHidden ? 0 : cart.reduce((sum, item) => sum + item.product.price * item.quantity, 0);
   const grandTotal = subtotal;
 
   const handleSubmitOrder = async (e: React.FormEvent) => {
@@ -191,7 +192,11 @@ export const CartCheckoutView: React.FC<CartCheckoutViewProps> = ({
                         {product.name}
                       </div>
                       <div className="text-[11px] text-slate-500 mt-0.5 font-mono">
-                        {(product.price || 0).toLocaleString('ar-EG')} ج.م / {product.unit}
+                        {!isPricesHidden ? (
+                          `${(product.price || 0).toLocaleString('ar-EG')} ج.م / ${product.unit}`
+                        ) : (
+                          <span className="text-slate-400 font-bold">🔒 سعر جملة خاص</span>
+                        )}
                       </div>
                     </div>
 
@@ -221,7 +226,11 @@ export const CartCheckoutView: React.FC<CartCheckoutViewProps> = ({
                     {/* Total Price & Delete */}
                     <div className="text-left shrink-0 min-w-[70px]">
                       <div className="font-black text-emerald-700 font-mono text-xs sm:text-sm">
-                        {(quantity * (product.price || 0)).toLocaleString('ar-EG')} ج.م
+                        {!isPricesHidden ? (
+                          `${(quantity * (product.price || 0)).toLocaleString('ar-EG')} ج.م`
+                        ) : (
+                          `${quantity} ${product.unit || 'كرتونة'}`
+                        )}
                       </div>
                       <button
                         type="button"
@@ -318,8 +327,16 @@ export const CartCheckoutView: React.FC<CartCheckoutViewProps> = ({
                 <div className="pt-2 border-t border-emerald-200 flex justify-between items-baseline">
                   <span className="text-sm font-bold text-emerald-950">الإجمالي النهائي للفاتورة:</span>
                   <span className="text-xl sm:text-2xl font-black text-emerald-800 font-mono">
-                    {(grandTotal || 0).toLocaleString('ar-EG')}{' '}
-                    <span className="text-xs font-normal">جنيه</span>
+                    {!isPricesHidden ? (
+                      <>
+                        {(grandTotal || 0).toLocaleString('ar-EG')}{' '}
+                        <span className="text-xs font-normal">جنيه</span>
+                      </>
+                    ) : (
+                      <span className="text-xs text-slate-600 font-bold bg-slate-200/80 px-2.5 py-1 rounded-lg">
+                        🔒 تسعير معتمد مع إدارة المبيعات
+                      </span>
+                    )}
                   </span>
                 </div>
               </div>

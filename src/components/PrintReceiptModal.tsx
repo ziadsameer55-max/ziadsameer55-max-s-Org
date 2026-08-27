@@ -308,8 +308,12 @@ export const PrintReceiptModal: React.FC<PrintReceiptModalProps> = ({
                   >
                     <th className="py-1 px-1">الصنف</th>
                     <th className="py-1 px-1 text-center">الكمية</th>
-                    <th className="py-1 px-1 text-center">السعر</th>
-                    <th className="py-1 px-1 text-left">الإجمالي</th>
+                    {(!settings?.hidePrices || isAdmin) && (
+                      <>
+                        <th className="py-1 px-1 text-center">السعر</th>
+                        <th className="py-1 px-1 text-left">الإجمالي</th>
+                      </>
+                    )}
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-200">
@@ -323,12 +327,16 @@ export const PrintReceiptModal: React.FC<PrintReceiptModalProps> = ({
                       <td className="py-1 px-1 text-center font-mono font-bold">
                         {item.quantity} {item.unit || 'كرتونة'}
                       </td>
-                      <td className="py-1 px-1 text-center font-mono">
-                        {item.unitPrice} ج
-                      </td>
-                      <td className="py-1 px-1 text-left font-mono font-bold">
-                        {item.totalPrice.toLocaleString('ar-EG')} ج
-                      </td>
+                      {(!settings?.hidePrices || isAdmin) && (
+                        <>
+                          <td className="py-1 px-1 text-center font-mono">
+                            {item.unitPrice} ج
+                          </td>
+                          <td className="py-1 px-1 text-left font-mono font-bold">
+                            {item.totalPrice.toLocaleString('ar-EG')} ج
+                          </td>
+                        </>
+                      )}
                     </tr>
                   ))}
                 </tbody>
@@ -349,62 +357,71 @@ export const PrintReceiptModal: React.FC<PrintReceiptModalProps> = ({
             </div>
 
             {/* Debt & Financial Breakdown Section (Strictly Structured) */}
-            {showDebtSection ? (
-              <div
-                style={{ fontSize: `${activeFontSizes.summary}px` }}
-                className="border-t-2 border-black border-dashed pt-2 space-y-1 print-summary-text"
-              >
-                {/* Previous Debt & Current Invoice */}
-                <div className="flex justify-between py-0.5">
-                  <span className="font-bold text-slate-800">المديونية السابقة:</span>
-                  <span className="font-mono font-black">{previousDebt.toLocaleString('ar-EG')} ج.م</span>
-                </div>
-                <div className="flex justify-between py-0.5">
-                  <span className="font-bold text-slate-800">الفاتورة الحالية:</span>
-                  <span className="font-mono font-black">{currentInvoice.toLocaleString('ar-EG')} ج.م</span>
-                </div>
+            {(!settings?.hidePrices || isAdmin) ? (
+              showDebtSection ? (
+                <div
+                  style={{ fontSize: `${activeFontSizes.summary}px` }}
+                  className="border-t-2 border-black border-dashed pt-2 space-y-1 print-summary-text"
+                >
+                  {/* Previous Debt & Current Invoice */}
+                  <div className="flex justify-between py-0.5">
+                    <span className="font-bold text-slate-800">المديونية السابقة:</span>
+                    <span className="font-mono font-black">{previousDebt.toLocaleString('ar-EG')} ج.م</span>
+                  </div>
+                  <div className="flex justify-between py-0.5">
+                    <span className="font-bold text-slate-800">الفاتورة الحالية:</span>
+                    <span className="font-mono font-black">{currentInvoice.toLocaleString('ar-EG')} ج.م</span>
+                  </div>
 
-                {/* Divider */}
-                <div className="border-t-2 border-black my-1"></div>
+                  {/* Divider */}
+                  <div className="border-t-2 border-black my-1"></div>
 
-                {/* Total Due & Paid */}
-                <div className="flex justify-between py-0.5 font-black text-xs sm:text-sm">
-                  <span>الإجمالي المستحق:</span>
-                  <span className="font-mono">{totalDue.toLocaleString('ar-EG')} ج.م</span>
-                </div>
-                <div className="flex justify-between py-0.5 font-bold text-emerald-900">
-                  <span>المدفوع:</span>
-                  <span className="font-mono">{paid.toLocaleString('ar-EG')} ج.م</span>
-                </div>
+                  {/* Total Due & Paid */}
+                  <div className="flex justify-between py-0.5 font-black text-xs sm:text-sm">
+                    <span>الإجمالي المستحق:</span>
+                    <span className="font-mono">{totalDue.toLocaleString('ar-EG')} ج.م</span>
+                  </div>
+                  <div className="flex justify-between py-0.5 font-bold text-emerald-900">
+                    <span>المدفوع:</span>
+                    <span className="font-mono">{paid.toLocaleString('ar-EG')} ج.م</span>
+                  </div>
 
-                {/* Divider */}
-                <div className="border-t-2 border-black my-1"></div>
+                  {/* Divider */}
+                  <div className="border-t-2 border-black my-1"></div>
 
-                {/* Remaining Total */}
-                <div className="flex justify-between py-0.5 font-black text-xs sm:text-base text-red-700">
-                  <span>المتبقي:</span>
-                  <span className="font-mono">{remainingFinal.toLocaleString('ar-EG')} ج.م</span>
+                  {/* Remaining Total */}
+                  <div className="flex justify-between py-0.5 font-black text-xs sm:text-base text-red-700">
+                    <span>المتبقي:</span>
+                    <span className="font-mono">{remainingFinal.toLocaleString('ar-EG')} ج.م</span>
+                  </div>
+                  <div className="border-t-2 border-black my-1"></div>
                 </div>
-                <div className="border-t-2 border-black my-1"></div>
-              </div>
+              ) : (
+                /* Standard Single-Invoice View */
+                <div
+                  style={{ fontSize: `${activeFontSizes.summary}px` }}
+                  className="border-t-2 border-black border-dashed pt-2 space-y-1 print-summary-text"
+                >
+                  <div className="flex justify-between font-black text-sm border-t border-slate-300 pt-1">
+                    <span>إجمالي الفاتورة الحالية:</span>
+                    <span className="font-mono">{order.grandTotal.toLocaleString('ar-EG')} جنيه</span>
+                  </div>
+                  <div className="flex justify-between text-emerald-800 font-bold">
+                    <span>المبلغ المسدد نقداً:</span>
+                    <span className="font-mono">{(order.paidAmount || 0).toLocaleString('ar-EG')} جنيه</span>
+                  </div>
+                  <div className="flex justify-between font-black text-red-700">
+                    <span>المتبقي على الحساب:</span>
+                    <span className="font-mono">{Math.max(0, order.grandTotal - (order.paidAmount || 0)).toLocaleString('ar-EG')} جنيه</span>
+                  </div>
+                </div>
+              )
             ) : (
-              /* Standard Single-Invoice View */
               <div
                 style={{ fontSize: `${activeFontSizes.summary}px` }}
-                className="border-t-2 border-black border-dashed pt-2 space-y-1 print-summary-text"
+                className="border-t-2 border-black border-dashed pt-2 text-center font-bold text-slate-700 print-summary-text"
               >
-                <div className="flex justify-between font-black text-sm border-t border-slate-300 pt-1">
-                  <span>إجمالي الفاتورة الحالية:</span>
-                  <span className="font-mono">{order.grandTotal.toLocaleString('ar-EG')} جنيه</span>
-                </div>
-                <div className="flex justify-between text-emerald-800 font-bold">
-                  <span>المبلغ المسدد نقداً:</span>
-                  <span className="font-mono">{(order.paidAmount || 0).toLocaleString('ar-EG')} جنيه</span>
-                </div>
-                <div className="flex justify-between font-black text-red-700">
-                  <span>المتبقي على الحساب:</span>
-                  <span className="font-mono">{Math.max(0, order.grandTotal - (order.paidAmount || 0)).toLocaleString('ar-EG')} جنيه</span>
-                </div>
+                🔒 إيصال استلام بضاعة جملة - التسعير والحساب مع الإدارة
               </div>
             )}
 

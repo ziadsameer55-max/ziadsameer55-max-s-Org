@@ -27,7 +27,7 @@ interface LoginModalProps {
 }
 
 export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onLoginSuccess }) => {
-  const [viewMode, setViewMode] = useState<'login' | 'register' | 'forgot'>('login');
+  const [viewMode, setViewMode] = useState<'login' | 'register'>('login');
   const [authRole, setAuthRole] = useState<'customer' | 'admin'>('customer');
 
   // Login form state
@@ -44,15 +44,6 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onLogin
   const [regPassword, setRegPassword] = useState('');
   const [regConfirmPassword, setRegConfirmPassword] = useState('');
   const [showRegPassword, setShowRegPassword] = useState(false);
-
-  // Forgot password form state
-  const [forgotPhone, setForgotPhone] = useState('');
-  const [resetToken, setResetToken] = useState('');
-  const [newPassword, setNewPassword] = useState('');
-  const [confirmNewPassword, setConfirmNewPassword] = useState('');
-  const [showNewPassword, setShowNewPassword] = useState(false);
-  const [forgotStep, setForgotStep] = useState<1 | 2>(1);
-  const [generatedDemoToken, setGeneratedDemoToken] = useState('');
 
   // UI state
   const [error, setError] = useState('');
@@ -171,83 +162,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onLogin
     }
   };
 
-  const handleForgotRequestSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    resetMessages();
-    setLoading(true);
 
-    try {
-      const res = await apiFetch('/api/auth/forgot-password', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ phone: forgotPhone.trim() }),
-      });
-
-      const data = await res.json();
-      if (data.success) {
-        if (data.resetToken) {
-          setResetToken(data.resetToken);
-          setGeneratedDemoToken(data.resetToken);
-        }
-        setSuccessMsg(data.message || 'تم إرسال رمز الاستعادة بنجاح');
-        setForgotStep(2);
-      } else {
-        setError(data.error || 'تعذر معالجة الطلب');
-      }
-    } catch (err) {
-      setError('حدث خطأ أثناء معالجة الطلب');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleResetExecuteSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    resetMessages();
-
-    if (newPassword !== confirmNewPassword) {
-      setError('كلمة المرور وتأكيدها غير متطابقين');
-      return;
-    }
-
-    if (newPassword.length < 12) {
-      setError('كلمة المرور الجديدة يجب ألا تقل عن 12 خانة وتتضمن أحرفاً وأرقاماً ورموزاً');
-      return;
-    }
-
-    setLoading(true);
-
-    try {
-      const res = await apiFetch('/api/auth/reset-password', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          phone: forgotPhone.trim(),
-          token: resetToken.trim(),
-          newPassword,
-          confirmPassword: confirmNewPassword,
-        }),
-      });
-
-      const data = await res.json();
-      if (data.success) {
-        setSuccessMsg(data.message || 'تم تغيير كلمة المرور بنجاح');
-        setTimeout(() => {
-          setViewMode('login');
-          setUsername(forgotPhone);
-          setPassword('');
-          setForgotStep(1);
-          setResetToken('');
-        }, 1500);
-      } else {
-        setError(data.error || 'رمز الاستعادة غير صحيح أو منتهي الصلاحية');
-      }
-    } catch (err) {
-      setError('حدث خطأ أثناء إعادة تعيين كلمة المرور');
-    } finally {
-      setLoading(false);
-    }
-  };
 
   return (
     <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-fadeIn" dir="rtl">
@@ -391,20 +306,6 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onLogin
               <div>
                 <div className="flex items-center justify-between mb-1.5">
                   <label className="block text-xs font-black text-slate-800">كلمة المرور</label>
-                  {authRole === 'customer' && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setViewMode('forgot');
-                        setForgotPhone(username);
-                        resetMessages();
-                      }}
-                      className="text-[11px] font-black text-emerald-700 hover:text-emerald-900 underline underline-offset-2 flex items-center gap-1"
-                    >
-                      <KeyRound className="w-3 h-3" />
-                      <span>نسيت كلمة المرور؟</span>
-                    </button>
-                  )}
                 </div>
                 <div className="relative">
                   <input
@@ -600,124 +501,6 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onLogin
               )}
             </button>
           </form>
-        )}
-
-        {/* 3. FORGOT / RESET PASSWORD VIEW */}
-        {viewMode === 'forgot' && (
-          <div className="space-y-3">
-            <button
-              type="button"
-              onClick={() => {
-                setViewMode('login');
-                resetMessages();
-              }}
-              className="inline-flex items-center gap-1 text-xs font-bold text-slate-500 hover:text-slate-800 mb-1"
-            >
-              <ArrowRight className="w-3.5 h-3.5" />
-              <span>العودة لتسجيل الدخول</span>
-            </button>
-
-            {forgotStep === 1 ? (
-              <form onSubmit={handleForgotRequestSubmit} className="space-y-3">
-                <p className="text-xs text-slate-600 font-bold leading-relaxed">
-                  أدخل رقم الهاتف المسجل بحسابك لاستلام رمز التحقق وتعيين كلمة مرور جديدة:
-                </p>
-
-                <div>
-                  <label className="block text-xs font-black text-slate-700 mb-1">رقم الهاتف المسجل</label>
-                  <div className="relative">
-                    <input
-                      type="tel"
-                      required
-                      value={forgotPhone}
-                      onChange={(e) => setForgotPhone(e.target.value)}
-                      placeholder="مثال: 01011112222"
-                      className="w-full bg-slate-50 border border-slate-200 focus:border-emerald-700 focus:bg-white rounded-2xl px-3.5 py-2.5 pr-10 text-xs text-slate-900 focus:outline-none transition-all font-bold font-mono"
-                    />
-                    <Phone className="w-4 h-4 text-slate-400 absolute right-3.5 top-3" />
-                  </div>
-                </div>
-
-                <button
-                  type="submit"
-                  disabled={loading}
-                  className="w-full bg-emerald-800 hover:bg-emerald-900 text-white font-black py-3 px-4 rounded-2xl text-xs transition-all shadow-md flex items-center justify-center gap-2"
-                >
-                  {loading ? 'جاري التحقق...' : 'طلب رمز استعادة كلمة المرور'}
-                </button>
-              </form>
-            ) : (
-              <form onSubmit={handleResetExecuteSubmit} className="space-y-3">
-                {generatedDemoToken && (
-                  <div className="p-2.5 bg-amber-50 border border-amber-200 rounded-xl text-[11px] font-mono text-amber-900">
-                    <span className="font-bold">رمز التحقق التجريبي المؤقت:</span> {generatedDemoToken}
-                  </div>
-                )}
-
-                <div>
-                  <label className="block text-xs font-black text-slate-700 mb-1">رمز الاستعادة (Token)</label>
-                  <input
-                    type="text"
-                    required
-                    value={resetToken}
-                    onChange={(e) => setResetToken(e.target.value)}
-                    placeholder="أدخل الرمز المستلم..."
-                    className="w-full bg-slate-50 border border-slate-200 focus:border-emerald-700 focus:bg-white rounded-2xl px-3.5 py-2 text-xs text-slate-900 focus:outline-none transition-all font-bold font-mono"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-black text-slate-700 mb-1">كلمة المرور الجديدة</label>
-                  <div className="relative">
-                    <input
-                      type={showNewPassword ? 'text' : 'password'}
-                      required
-                      minLength={12}
-                      value={newPassword}
-                      onChange={(e) => setNewPassword(e.target.value)}
-                      placeholder="12 خانة على الأقل (حروف وأرقام ورموز)..."
-                      className="w-full bg-slate-50 border border-slate-200 focus:border-emerald-700 focus:bg-white rounded-2xl px-3.5 py-2 pr-10 text-xs text-slate-900 focus:outline-none transition-all font-bold font-mono"
-                    />
-                    <Lock className="w-4 h-4 text-slate-400 absolute right-3.5 top-2.5" />
-                  </div>
-                </div>
-
-                <div>
-                  <label className="block text-xs font-black text-slate-700 mb-1">تأكيد كلمة المرور الجديدة</label>
-                  <div className="relative">
-                    <input
-                      type={showNewPassword ? 'text' : 'password'}
-                      required
-                      minLength={12}
-                      value={confirmNewPassword}
-                      onChange={(e) => setConfirmNewPassword(e.target.value)}
-                      placeholder="أعد إدخال كلمة المرور..."
-                      className="w-full bg-slate-50 border border-slate-200 focus:border-emerald-700 focus:bg-white rounded-2xl px-3.5 py-2 pr-10 text-xs text-slate-900 focus:outline-none transition-all font-bold font-mono"
-                    />
-                    <Lock className="w-4 h-4 text-slate-400 absolute right-3.5 top-2.5" />
-                  </div>
-                </div>
-
-                <div className="flex items-center justify-between">
-                  <button
-                    type="button"
-                    onClick={() => setShowNewPassword(!showNewPassword)}
-                    className="text-[11px] text-slate-500 font-bold hover:text-slate-800"
-                  >
-                    {showNewPassword ? 'إخفاء كلمات المرور' : 'إظهار كلمات المرور'}
-                  </button>
-                </div>
-
-                <button
-                  type="submit"
-                  disabled={loading}
-                  className="w-full bg-emerald-800 hover:bg-emerald-900 text-white font-black py-3 px-4 rounded-2xl text-xs transition-all shadow-md flex items-center justify-center gap-2"
-                >
-                  {loading ? 'جاري التحديث...' : 'تأكيد تغيير كلمة المرور'}
-                </button>
-              </form>
-            )}
-          </div>
         )}
       </div>
     </div>

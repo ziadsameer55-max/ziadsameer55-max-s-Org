@@ -16,6 +16,7 @@ import {
   ExternalLink,
   Sparkles,
   DollarSign,
+  Bell,
 } from 'lucide-react';
 
 interface AdminSidebarProps {
@@ -90,6 +91,13 @@ export const AdminSidebar: React.FC<AdminSidebarProps> = ({
       icon: Sparkles,
       badge: 'عروض 🔥',
       badgeColor: 'bg-red-500 text-white font-bold',
+    },
+    {
+      id: 'admin-information',
+      label: 'المعلومات والتنبيهات',
+      icon: Bell,
+      badge: 'إعلانات 🔔',
+      badgeColor: 'bg-amber-400 text-slate-950 font-black',
     },
     {
       id: 'admin-settings',

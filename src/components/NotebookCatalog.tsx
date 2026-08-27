@@ -22,7 +22,6 @@ import {
 } from 'lucide-react';
 import { ProductCard } from './ProductCard';
 import { DealsCarousel } from './DealsCarousel';
-import { BestsellersShelf } from './BestsellersShelf';
 import { AllDealsView } from './AllDealsView';
 
 export interface CartItem {
@@ -37,7 +36,6 @@ interface NotebookCatalogProps {
   user: User | null;
   orders?: Order[];
   deals?: DealOffer[];
-  bestsellers?: Product[];
   isStoreOpen: boolean;
   cart: CartItem[];
   favorites: string[];
@@ -79,7 +77,6 @@ export const NotebookCatalog: React.FC<NotebookCatalogProps> = ({
   user,
   orders = [],
   deals = [],
-  bestsellers = [],
   isStoreOpen,
   cart = [],
   favorites = [],
@@ -104,7 +101,7 @@ export const NotebookCatalog: React.FC<NotebookCatalogProps> = ({
     }
   });
 
-  const [activeFilterTab, setActiveFilterTab] = useState<'all' | 'offers' | 'bestsellers' | 'favorites'>('all');
+  const [activeFilterTab, setActiveFilterTab] = useState<'all' | 'offers' | 'favorites'>('all');
 
   useEffect(() => {
     try {
@@ -362,8 +359,8 @@ export const NotebookCatalog: React.FC<NotebookCatalogProps> = ({
         })}
       </div>
 
-      {/* 5. Offers & Deals Carousel (Top of Home Catalog) */}
-      {!searchQuery && selectedCategory === 'all' && activeFilterTab === 'all' && deals.length > 0 && (
+      {/* 5. Offers & Deals Section (Top of Home Catalog) */}
+      {!searchQuery && selectedCategory === 'all' && activeFilterTab === 'all' && (
         <DealsCarousel
           deals={deals}
           products={products}
@@ -372,18 +369,6 @@ export const NotebookCatalog: React.FC<NotebookCatalogProps> = ({
           onUpdateCartItem={onUpdateCartItem}
           onSetCartItemQty={onSetCartItemQty}
           onViewAllDeals={() => setShowAllDealsView(true)}
-          isStoreOpen={isStoreOpen}
-        />
-      )}
-
-      {/* 6. Most Requested Shelf (الأكثر طلباً - الأعلى مبيعاً) */}
-      {!searchQuery && selectedCategory === 'all' && activeFilterTab === 'all' && bestsellers.length > 0 && (
-        <BestsellersShelf
-          products={bestsellers}
-          settings={settings}
-          cartItems={cart}
-          onUpdateCartItem={onUpdateCartItem}
-          onSetCartItemQty={onSetCartItemQty}
           isStoreOpen={isStoreOpen}
         />
       )}

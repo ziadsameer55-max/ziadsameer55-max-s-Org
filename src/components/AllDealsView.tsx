@@ -6,19 +6,19 @@ import {
   Filter,
   ArrowUpDown,
   Tag,
-  Plus,
-  Minus,
-  Check,
-  X,
-  Lock,
   Gift,
   Star,
   Package,
   Award,
   Clock,
   ChevronRight,
+  Sparkles,
+  Percent,
+  TrendingDown,
+  RotateCcw,
+  ArrowRight,
 } from 'lucide-react';
-import { DealCountdown } from './DealsCarousel';
+import { PremiumDealCard } from './DealsCarousel';
 
 interface AllDealsViewProps {
   deals: DealOffer[];
@@ -101,101 +101,90 @@ export const AllDealsView: React.FC<AllDealsViewProps> = ({
           return b.offerPrice - a.offerPrice;
         }
         if (sortBy === 'newest') {
-          return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+          return new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime();
         }
         return 0;
       });
   }, [activeDeals, searchQuery, selectedOfferType, selectedCategory, sortBy]);
 
   const offerTypeFilters = [
-    { key: 'all', label: 'كل العروض', icon: Flame },
-    { key: 'discount', label: 'خصومات خاصة', icon: Tag },
-    { key: 'special_price', label: 'أسعار مميزة', icon: Gift },
-    { key: 'new_product', label: 'منتجات جديدة', icon: Star },
-    { key: 'carton_deal', label: 'سعر كرتونة', icon: Package },
-    { key: 'bestseller', label: 'الأكثر طلبًا', icon: Award },
-    { key: 'limited_time', label: 'لفترة محدودة', icon: Clock },
+    { key: 'all', label: 'جميع العروض', icon: Sparkles },
+    { key: 'discount', label: 'تخفيضات ونسب خصم', icon: Percent },
+    { key: 'special_price', label: 'أسعار جملة خاصة', icon: Gift },
+    { key: 'carton_deal', label: 'عروض كراتين', icon: Package },
+    { key: 'limited_time', label: 'عروض محدودة الوقت', icon: Clock },
+    { key: 'new_product', label: 'أصناف جديدة', icon: Star },
   ];
 
   return (
-    <div className="space-y-6 pb-20 animate-fade-in text-right">
-      {/* Top Bar Header */}
-      <div className="bg-gradient-to-r from-amber-600 via-orange-600 to-amber-700 rounded-3xl p-6 text-white shadow-lg relative overflow-hidden">
-        <div className="relative z-10 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-          <div className="space-y-1.5">
-            <div className="flex items-center gap-2">
-              <button
-                onClick={onBack}
-                className="bg-white/20 hover:bg-white/30 p-2 rounded-2xl transition-colors shrink-0"
-                title="الرجوع للكتالوج"
-              >
-                <ChevronRight className="w-5 h-5" />
-              </button>
-              <div className="flex items-center gap-2">
-                <span className="w-3 h-3 rounded-full bg-amber-300 animate-ping" />
-                <h1 className="text-xl sm:text-2xl font-black tracking-tight">
-                  🔥 صالة العروض والفرص الحصرية
-                </h1>
-              </div>
-            </div>
-            <p className="text-xs sm:text-sm text-amber-100/90 max-w-xl pr-9">
-              عروض الجملة والخصومات المحدثة يومياً لتجار المحلات والسوبر ماركت من شركة الحليم للتجارة والتوزيع.
-            </p>
-          </div>
+    <div className="space-y-4 pb-20 animate-fadeIn" dir="rtl">
+      {/* Top Header */}
+      <div className="bg-gradient-to-r from-emerald-950 via-emerald-900 to-slate-950 border border-emerald-800/60 rounded-3xl p-5 text-white shadow-xl relative overflow-hidden">
+        <div className="absolute top-0 right-0 w-80 h-40 bg-amber-400/10 rounded-full blur-3xl pointer-events-none" />
 
-          <div className="bg-white/10 backdrop-blur-md border border-white/20 rounded-2xl p-3 text-center shrink-0">
-            <span className="text-2xl font-black font-mono block">
-              {activeDeals.length}
-            </span>
-            <span className="text-[11px] text-amber-100 font-medium block">
-              عرض متاح حالياً
-            </span>
+        <div className="relative z-10 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <button
+              onClick={onBack}
+              className="w-10 h-10 rounded-2xl bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-all cursor-pointer shrink-0 border border-white/10"
+              title="العودة للكتالوج الرئيسي"
+            >
+              <ArrowRight className="w-5 h-5" />
+            </button>
+
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="bg-amber-400/20 text-amber-300 border border-amber-400/40 text-[10px] font-black px-2.5 py-0.5 rounded-full">
+                  صفحة التخفيضات الكبرى
+                </span>
+                <span className="text-xs text-emerald-200 font-mono font-bold">
+                  ({filteredDeals.length} من {activeDeals.length} عرض)
+                </span>
+              </div>
+              <h1 className="text-xl sm:text-2xl font-black text-white tracking-tight flex items-center gap-2 mt-1">
+                <Flame className="w-6 h-6 text-amber-400" />
+                <span>كافة عروض وخصومات الجملة</span>
+              </h1>
+            </div>
           </div>
         </div>
       </div>
 
       {/* Filter and Search Bar */}
-      <div className="bg-white border border-slate-200/90 rounded-2xl p-4 shadow-sm space-y-3.5">
-        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
-          {/* Search */}
+      <div className="bg-white border border-slate-200 rounded-3xl p-4 shadow-sm space-y-3">
+        <div className="flex flex-col sm:flex-row gap-2.5">
+          {/* Search Input */}
           <div className="relative flex-1">
-            <Search className="w-4 h-4 text-slate-400 absolute right-3.5 top-1/2 -translate-y-1/2" />
             <input
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="ابحث في العروض (اسم الصنف، الماركة، نوع العرض)..."
-              className="w-full bg-slate-50 border border-slate-200 rounded-xl pr-10 pl-4 py-2 text-xs font-medium text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500"
+              placeholder="ابحث في العروض بالاسم، الماركة أو الصنف..."
+              className="w-full bg-slate-50 border border-slate-200 focus:border-emerald-700 focus:bg-white rounded-2xl px-3.5 py-2.5 pr-10 text-xs text-slate-900 font-bold focus:outline-none transition-all"
             />
-            {searchQuery && (
-              <button
-                onClick={() => setSearchQuery('')}
-                className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            )}
+            <Search className="w-4 h-4 text-slate-400 absolute right-3.5 top-3" />
           </div>
 
-          {/* Sort Selector */}
+          {/* Sort Dropdown */}
           <div className="flex items-center gap-2">
-            <ArrowUpDown className="w-4 h-4 text-slate-400 shrink-0" />
-            <select
-              value={sortBy}
-              onChange={(e) => setSortBy(e.target.value as any)}
-              aria-label="ترتيب العروض حسب"
-              className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold text-slate-700 focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500"
-            >
-              <option value="discount">الأعلى خصماً 💥</option>
-              <option value="price_asc">الأقل سعراً ⬇️</option>
-              <option value="price_desc">الأعلى سعراً ⬆️</option>
-              <option value="newest">الأحدث نزولاً ✨</option>
-            </select>
+            <div className="relative shrink-0">
+              <select
+                value={sortBy}
+                onChange={(e) => setSortBy(e.target.value as any)}
+                className="bg-slate-50 border border-slate-200 rounded-2xl px-3.5 py-2.5 text-xs font-bold text-slate-800 focus:outline-none focus:border-emerald-700 appearance-none pl-8 pr-3 cursor-pointer"
+              >
+                <option value="discount">الأعلى توفيراً وخصماً</option>
+                <option value="price_asc">الأقل سعراً أولاً</option>
+                <option value="price_desc">الأعلى سعراً أولاً</option>
+                <option value="newest">أحدث العروض المضافة</option>
+              </select>
+              <ArrowUpDown className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-3 pointer-events-none" />
+            </div>
           </div>
         </div>
 
-        {/* Offer Type Chips */}
-        <div className="flex items-center gap-2 overflow-x-auto pb-1 scrollbar-thin">
+        {/* Offer Types Pills */}
+        <div className="flex items-center gap-1.5 overflow-x-auto pb-1 scrollbar-thin">
           {offerTypeFilters.map((flt) => {
             const Icon = flt.icon;
             const isSelected = selectedOfferType === flt.key;
@@ -203,9 +192,9 @@ export const AllDealsView: React.FC<AllDealsViewProps> = ({
               <button
                 key={flt.key}
                 onClick={() => setSelectedOfferType(flt.key)}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-black whitespace-nowrap transition-all ${
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-black whitespace-nowrap transition-all cursor-pointer ${
                   isSelected
-                    ? 'bg-amber-600 text-white shadow-sm shadow-amber-600/30'
+                    ? 'bg-emerald-800 text-white shadow-sm'
                     : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
                 }`}
               >
@@ -218,15 +207,15 @@ export const AllDealsView: React.FC<AllDealsViewProps> = ({
 
         {/* Category Filters */}
         {categories.length > 0 && (
-          <div className="flex items-center gap-1.5 overflow-x-auto pt-1 border-t border-slate-100 scrollbar-thin">
+          <div className="flex items-center gap-1.5 overflow-x-auto pt-2 border-t border-slate-100 scrollbar-thin">
             <span className="text-[11px] font-bold text-slate-400 shrink-0 ml-1">
               القسم:
             </span>
             <button
               onClick={() => setSelectedCategory('all')}
-              className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-colors ${
+              className={`px-3 py-1 rounded-lg text-xs font-bold transition-colors cursor-pointer ${
                 selectedCategory === 'all'
-                  ? 'bg-emerald-800 text-white'
+                  ? 'bg-amber-500 text-slate-950 font-black'
                   : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
               }`}
             >
@@ -236,9 +225,9 @@ export const AllDealsView: React.FC<AllDealsViewProps> = ({
               <button
                 key={cat}
                 onClick={() => setSelectedCategory(cat)}
-                className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-colors whitespace-nowrap ${
+                className={`px-3 py-1 rounded-lg text-xs font-bold transition-colors whitespace-nowrap cursor-pointer ${
                   selectedCategory === cat
-                    ? 'bg-emerald-800 text-white'
+                    ? 'bg-amber-500 text-slate-950 font-black'
                     : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
                 }`}
               >
@@ -249,17 +238,17 @@ export const AllDealsView: React.FC<AllDealsViewProps> = ({
         )}
       </div>
 
-      {/* Deals Grid */}
+      {/* Grid of Deals */}
       {filteredDeals.length === 0 ? (
-        <div className="bg-white border border-slate-200 rounded-3xl p-12 text-center space-y-3">
-          <div className="w-16 h-16 rounded-full bg-amber-50 text-amber-600 flex items-center justify-center mx-auto">
-            <Flame className="w-8 h-8" />
+        <div className="bg-white border border-slate-200 rounded-3xl p-10 text-center space-y-3">
+          <div className="w-14 h-14 rounded-2xl bg-amber-50 text-amber-600 flex items-center justify-center mx-auto">
+            <Flame className="w-7 h-7" />
           </div>
           <h3 className="text-base font-black text-slate-900">
-            لا توجد عروض مطابقة للبحث
+            لا توجد عروض مطابقة لمعايير البحث
           </h3>
           <p className="text-xs text-slate-500 max-w-sm mx-auto">
-            جرب تغيير كلمات البحث أو تصفية الأقسام لعرض باقي الفرص المتاحة.
+            يمكنك تغيير كلمات البحث أو إعادة تعيين الفلاتر لعرض كافة العروض المتاحة.
           </p>
           <button
             onClick={() => {
@@ -267,13 +256,13 @@ export const AllDealsView: React.FC<AllDealsViewProps> = ({
               setSelectedOfferType('all');
               setSelectedCategory('all');
             }}
-            className="bg-amber-600 hover:bg-amber-700 text-white text-xs font-black px-4 py-2 rounded-xl transition-colors"
+            className="bg-emerald-800 hover:bg-emerald-900 text-white text-xs font-black px-4 py-2 rounded-xl transition-colors cursor-pointer shadow-sm"
           >
             إعادة تعيين الفلاتر
           </button>
         </div>
       ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
           {filteredDeals.map((deal) => {
             const matchedProduct = products.find((p) => p.id === deal.productId) || {
               id: deal.productId,
@@ -283,7 +272,7 @@ export const AllDealsView: React.FC<AllDealsViewProps> = ({
               unit: deal.productUnit || 'كرتونة',
               image: deal.productImage || 'https://images.unsplash.com/photo-1523362628745-0c100150b504?w=500',
               status: 'open' as const,
-              minQty: 1,
+              minQty: deal.minOrderQty || 1,
               maxQty: null,
               stock: 100,
             };
@@ -294,148 +283,24 @@ export const AllDealsView: React.FC<AllDealsViewProps> = ({
               name: deal.productName || matchedProduct.name,
               image: deal.productImage || matchedProduct.image,
               unit: deal.productUnit || matchedProduct.unit,
+              minQty: deal.minOrderQty || matchedProduct.minQty || 1,
             };
 
             const cartItem = cartItems.find((ci) => ci.product.id === effectiveProduct.id);
             const currentQty = cartItem ? cartItem.quantity : 0;
 
             return (
-              <div
-                key={deal.id}
-                className="bg-white border border-slate-200/90 rounded-2xl p-4 flex flex-col justify-between shadow-sm hover:shadow-md transition-shadow relative overflow-hidden group"
-              >
-                {/* Top Badge */}
-                <div className="flex items-center justify-between gap-1 mb-2.5">
-                  <span className="inline-flex items-center gap-1 bg-amber-500 text-slate-950 text-[10px] font-black px-2 py-0.5 rounded-lg shadow-xs">
-                    <Flame className="w-3 h-3" />
-                    <span>{deal.badgeText || '🔥 عرض خاص'}</span>
-                  </span>
-
-                  {!isPricesHidden && deal.discountPercentage && deal.discountPercentage > 0 && (
-                    <span className="bg-rose-50 text-rose-700 border border-rose-200 text-xs font-black font-mono px-2 py-0.5 rounded-md">
-                      -{deal.discountPercentage}%
-                    </span>
-                  )}
-                </div>
-
-                {/* Product Image */}
-                <div className="relative aspect-4/3 rounded-xl bg-slate-50 border border-slate-100 overflow-hidden mb-3 flex items-center justify-center p-3">
-                  <img
-                    src={deal.productImage || matchedProduct.image}
-                    alt={deal.productName}
-                    referrerPolicy="no-referrer"
-                    className="max-h-full max-w-full object-contain group-hover:scale-105 transition-transform duration-300"
-                    loading="lazy"
+              <div key={deal.id} className="flex justify-center">
+                <div className="w-full max-w-[320px]">
+                  <PremiumDealCard
+                    deal={deal}
+                    product={effectiveProduct}
+                    quantity={currentQty}
+                    isPricesHidden={isPricesHidden}
+                    onUpdateQty={onUpdateCartItem}
+                    onSetQty={onSetCartItemQty}
+                    isStoreOpen={isStoreOpen}
                   />
-                  {matchedProduct.stock <= (matchedProduct.lowStockThreshold || 5) && matchedProduct.stock > 0 && (
-                    <div className="absolute bottom-1.5 right-1.5 bg-amber-500 text-slate-950 text-[9px] font-black px-1.5 py-0.5 rounded-md">
-                      متبقي {matchedProduct.stock} فقط
-                    </div>
-                  )}
-                </div>
-
-                {/* Info */}
-                <div className="space-y-1 text-right flex-1 flex flex-col justify-between">
-                  <div>
-                    <span className="text-[10px] text-slate-400 font-medium block">
-                      {deal.productBrand || deal.category || matchedProduct.category}
-                      {deal.productSize ? ` • ${deal.productSize}` : ''}
-                    </span>
-                    <h3 className="font-black text-sm text-slate-900 line-clamp-2 leading-snug">
-                      {deal.productName}
-                    </h3>
-                    {deal.description && (
-                      <p className="text-[11px] text-slate-500 line-clamp-2 mt-1">
-                        {deal.description}
-                      </p>
-                    )}
-                  </div>
-
-                  {deal.endDate && (
-                    <div className="mt-2">
-                      <DealCountdown endDate={deal.endDate} />
-                    </div>
-                  )}
-
-                  {/* Pricing */}
-                  <div className="pt-2.5 border-t border-slate-100 mt-2.5">
-                    {isPricesHidden ? (
-                      <div className="bg-amber-50 border border-amber-200 rounded-xl p-2 text-center text-amber-900 text-xs font-black flex items-center justify-center gap-1.5">
-                        <Lock className="w-3.5 h-3.5 text-amber-700" />
-                        <span>عرض خاص - احصل على سعر مميز</span>
-                      </div>
-                    ) : (
-                      <div className="flex items-baseline justify-between">
-                        <div>
-                          <span className="text-[11px] text-slate-400 font-medium">
-                            سعر العرض:
-                          </span>
-                          <div className="flex items-baseline gap-1 font-mono">
-                            <span className="text-lg font-black text-emerald-800">
-                              {deal.offerPrice.toLocaleString('ar-EG')}
-                            </span>
-                            <span className="text-[10px] text-slate-500 font-bold">
-                              ج.م / {deal.productUnit || matchedProduct.unit}
-                            </span>
-                          </div>
-                        </div>
-
-                        {deal.originalPrice > deal.offerPrice && (
-                          <div className="text-left font-mono">
-                            <span className="text-[11px] text-slate-400 line-through block">
-                              {deal.originalPrice.toLocaleString('ar-EG')} ج.م
-                            </span>
-                            <span className="text-[10px] text-emerald-600 font-bold block">
-                              وفّر {(deal.originalPrice - deal.offerPrice).toLocaleString('ar-EG')} ج
-                            </span>
-                          </div>
-                        )}
-                      </div>
-                    )}
-
-                    {/* Add to Cart Controls */}
-                    <div className="mt-3">
-                      {!isStoreOpen ? (
-                        <div className="w-full py-2.5 px-3 bg-red-50 border border-red-200 text-red-700 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 shadow-2xs">
-                          <Lock className="w-4 h-4" />
-                          <span>مغلق</span>
-                        </div>
-                      ) : currentQty === 0 ? (
-                        <button
-                          onClick={() => onUpdateCartItem(effectiveProduct, 1)}
-                          className="w-full py-2.5 px-3 bg-emerald-800 hover:bg-emerald-900 active:scale-[0.98] text-white rounded-xl text-xs font-black flex items-center justify-center gap-1.5 shadow-sm transition-all"
-                        >
-                          <Plus className="w-4 h-4" />
-                          <span>أضف للسلة بالعرض</span>
-                        </button>
-                      ) : (
-                        <div className="flex items-center justify-between bg-emerald-50 border border-emerald-300 rounded-xl p-1">
-                          <button
-                            onClick={() => onUpdateCartItem(effectiveProduct, -1)}
-                            className="w-8 h-8 bg-white hover:bg-emerald-100 text-emerald-800 border border-emerald-200 rounded-lg flex items-center justify-center font-black transition-colors"
-                          >
-                            <Minus className="w-4 h-4" />
-                          </button>
-
-                          <div className="text-center">
-                            <span className="font-mono font-black text-sm text-emerald-950 block">
-                              {currentQty}
-                            </span>
-                            <span className="text-[9px] text-emerald-700 font-bold block">
-                              {deal.productUnit || effectiveProduct.unit} في السلة
-                            </span>
-                          </div>
-
-                          <button
-                            onClick={() => onUpdateCartItem(effectiveProduct, 1)}
-                            className="w-8 h-8 bg-emerald-800 hover:bg-emerald-900 text-white rounded-lg flex items-center justify-center font-black transition-colors"
-                          >
-                            <Plus className="w-4 h-4" />
-                          </button>
-                        </div>
-                      )}
-                    </div>
-                  </div>
                 </div>
               </div>
             );

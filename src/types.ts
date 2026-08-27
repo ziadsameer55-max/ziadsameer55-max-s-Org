@@ -302,6 +302,56 @@ export type OfferType =
   | 'bestseller' // 🏆 الأكثر طلبًا
   | 'limited_time'; // ⏰ عرض لفترة محدودة
 
+export type InformationType =
+  | 'general' // 📢 إعلان عام
+  | 'price_change' // 🏷️ تغيير أسعار
+  | 'deal' // 🔥 عرض ترويجي
+  | 'offer' // 🔥 عرض خاص
+  | 'urgent' // ⚠️ تنبيه عاجل
+  | 'warning' // ⚠️ تحذير وتنبيه
+  | 'policy' // 📦 تعليمات وتوريدات
+  | 'schedule'; // ⏰ مواعيد عمل وتوزيع
+
+export type InformationPriority = 'normal' | 'high' | 'urgent';
+
+export type InformationStatus = 'draft' | 'published' | 'archived';
+
+export interface InformationItem {
+  id: string;
+  title: string;
+  content: string;
+  type: InformationType;
+  priority: InformationPriority;
+  targetType: 'all' | 'specific_customer' | 'group';
+  targetId?: string | null;
+  targetName?: string | null;
+  productId?: string | null;
+  productName?: string | null;
+  productImage?: string | null;
+  productUnit?: string | null;
+  oldPrice?: number | null;
+  newPrice?: number | null;
+  priceChangePercentage?: number | null;
+  status: InformationStatus;
+  publishedAt: string; // ISO string
+  expiresAt?: string | null; // ISO string
+  createdBy?: string;
+  createdAt: string;
+  updatedAt: string;
+  // Dynamic fields computed per user
+  isRead?: boolean;
+  readAt?: string | null;
+  readCount?: number;
+  totalTargetCount?: number;
+}
+
+export interface InformationRead {
+  id: string;
+  informationId: string;
+  userId: string;
+  readAt: string;
+}
+
 export interface DealOffer {
   id: string;
   productId: string;

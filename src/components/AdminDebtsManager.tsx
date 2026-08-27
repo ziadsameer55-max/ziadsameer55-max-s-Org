@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { CustomerDebtSummary, FinancialSummary, CustomerStatement, PaymentTransaction, Order } from '../types';
+import { CustomerDebtSummary, FinancialSummary, CustomerStatement, PaymentTransaction, Order, SystemSettings } from '../types';
 import {
   Wallet,
   DollarSign,
@@ -26,11 +26,13 @@ import { apiFetch } from '../utils/api';
 import { PrintStatementModal } from './PrintStatementModal';
 
 interface AdminDebtsManagerProps {
+  settings?: SystemSettings | null;
   onOpenOrderDetails?: (orderId: string) => void;
   onRefreshData?: () => void;
 }
 
 export const AdminDebtsManager: React.FC<AdminDebtsManagerProps> = ({
+  settings = null,
   onOpenOrderDetails,
   onRefreshData,
 }) => {
@@ -1117,9 +1119,9 @@ export const AdminDebtsManager: React.FC<AdminDebtsManagerProps> = ({
             name: selectedStatement.customer.name,
             phone: selectedStatement.customer.phone,
             storeName: selectedStatement.customer.storeName,
-            address: selectedStatement.customer.address || 'محافظة الإسكندرية - بجوار مسجد القويري - بوابة 8',
+            address: selectedStatement.customer.address || settings?.address || 'محافظة الإسكندرية - بجوار مسجد القويري - بوابة 8',
           }}
-          settings={null}
+          settings={settings}
           orders={selectedStatement.orders || []}
           payments={selectedStatement.payments || []}
           summary={selectedStatement.summary}

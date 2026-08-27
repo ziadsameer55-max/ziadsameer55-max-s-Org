@@ -38,6 +38,10 @@ import {
   DealOffer,
   OfferType,
   AdminCustomerRecord,
+  InformationItem,
+  InformationType,
+  InformationPriority,
+  InformationStatus,
 } from './src/types.js';
 
 async function startServer() {
@@ -46,6 +50,30 @@ async function startServer() {
 
   // Request body size limits
   app.use(express.json({ limit: '2mb' }));
+
+  // Global CORS & Preflight Handling (Crucial for Production, WebView, and Cross-Origin clients)
+  app.use((req: Request, res: Response, next) => {
+    const origin = req.headers.origin;
+    if (origin) {
+      res.setHeader('Access-Control-Allow-Origin', origin);
+      res.setHeader('Access-Control-Allow-Credentials', 'true');
+    } else {
+      res.setHeader('Access-Control-Allow-Origin', '*');
+    }
+    res.setHeader(
+      'Access-Control-Allow-Methods',
+      'GET, POST, PUT, PATCH, DELETE, OPTIONS, HEAD'
+    );
+    res.setHeader(
+      'Access-Control-Allow-Headers',
+      'Origin, X-Requested-With, Content-Type, Accept, Authorization, X-Session-Token, X-User-Role'
+    );
+
+    if (req.method === 'OPTIONS') {
+      return res.status(204).end();
+    }
+    next();
+  });
 
   // Strict Direct Database & Config File Protection
   app.use((req: Request, res: Response, next) => {
@@ -72,11 +100,19 @@ async function startServer() {
     next();
   });
 
-  // Client IP helper
+  // Client IP helper - comprehensive extraction for Cloud Run, Vercel, Proxies
   const getClientIp = (req: Request): string => {
+    const cfIp = req.headers['cf-connecting-ip'];
+    if (typeof cfIp === 'string' && cfIp) return cfIp.trim();
+
+    const realIp = req.headers['x-real-ip'];
+    if (typeof realIp === 'string' && realIp) return realIp.trim();
+
     const forwarded = req.headers['x-forwarded-for'];
-    if (typeof forwarded === 'string') return forwarded.split(',')[0].trim();
-    return req.ip || req.socket.remoteAddress || '127.0.0.1';
+    if (typeof forwarded === 'string' && forwarded) {
+      return forwarded.split(',')[0].trim();
+    }
+    return req.ip || req.socket?.remoteAddress || '127.0.0.1';
   };
 
   // Health check endpoint
@@ -1019,16 +1055,37 @@ async function startServer() {
 
   app.post('/api/products', requireAdmin, async (req: Request, res: Response) => {
     try {
-      const p: Product = req.body;
+      const p: Product & { notifyPriceChange?: boolean } = req.body;
       const db = await getDb();
       const id = p.id || 'p_' + Date.now();
+      const newPrice = Number(p.price) || 0;
+
+      // Check if product previously existed and had a different price
+      let previousPrice: number | null = null;
+      let existingProductName = p.name;
+      let existingUnit = p.unit;
+      let existingImage = p.image;
+
+      if (p.id) {
+        const prevStmt = db.prepare('SELECT price, name, unit, image FROM products WHERE id = ?');
+        prevStmt.bind([p.id]);
+        if (prevStmt.step()) {
+          const row = prevStmt.getAsObject();
+          previousPrice = Number(row.price) || 0;
+          existingProductName = String(row.name || p.name);
+          existingUnit = String(row.unit || p.unit);
+          existingImage = String(row.image || p.image);
+        }
+        prevStmt.free();
+      }
+
       db.run(
         `INSERT OR REPLACE INTO products (id, name, category, price, unit, image, status, minQty, maxQty, stock, description) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           id,
           p.name,
           p.category,
-          Number(p.price) || 0,
+          newPrice,
           p.unit,
           p.image || 'https://images.unsplash.com/photo-1523362628745-0c100150b504?w=500',
           p.status || 'open',
@@ -1038,8 +1095,64 @@ async function startServer() {
           p.description || '',
         ]
       );
+
+      // Smart Notification Trigger: If price has changed and notification is requested or enabled
+      const hasPriceChanged = previousPrice !== null && previousPrice !== newPrice && previousPrice > 0;
+      const shouldNotify = p.notifyPriceChange !== false && (p.notifyPriceChange === true || hasPriceChanged);
+
+      let createdInfoId: string | null = null;
+
+      if (hasPriceChanged && shouldNotify) {
+        try {
+          const priceDiff = newPrice - (previousPrice || 0);
+          const pctChange = Math.round(((newPrice - (previousPrice || 0)) / (previousPrice || 1)) * 100);
+          const isDecrease = priceDiff < 0;
+          const pctFormatted = Math.abs(pctChange);
+          const signText = isDecrease ? `انخفاض بنسبة ${pctFormatted}% 📉` : `تعديل بنسبة +${pctFormatted}% 📈`;
+
+          const infoTitle = `تحديث سعر: ${p.name} (${newPrice.toLocaleString('ar-EG')} ج.م)`;
+          const infoContent = `نحيط عملاءنا الكرام علماً بتحديث سعر صنف "${p.name}". السعر الجديد: ${newPrice.toLocaleString('ar-EG')} ج.م لكل ${p.unit || 'كرتونة'} (السعر السابق: ${(previousPrice || 0).toLocaleString('ar-EG')} ج.م - ${signText}). متاح الآن للطلب المباشر.`;
+
+          createdInfoId = 'info_pc_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
+          const nowIso = new Date().toISOString();
+          const adminUser = (req as any).user;
+
+          db.run(`
+            INSERT INTO information (
+              id, title, content, type, priority, targetType, targetId, targetName,
+              productId, productName, productImage, productUnit, oldPrice, newPrice, priceChangePercentage,
+              status, publishedAt, expiresAt, createdBy, createdAt, updatedAt
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `, [
+            createdInfoId,
+            infoTitle,
+            infoContent,
+            'price_change',
+            'high',
+            'all',
+            null,
+            null,
+            id,
+            p.name,
+            p.image || existingImage || null,
+            p.unit || existingUnit || 'كرتونة',
+            previousPrice,
+            newPrice,
+            pctChange,
+            'published',
+            nowIso,
+            null,
+            adminUser?.fullName || 'إدارة التسعير',
+            nowIso,
+            nowIso,
+          ]);
+        } catch (infoErr) {
+          console.error('Error creating automatic price change information:', infoErr);
+        }
+      }
+
       saveDb();
-      res.json({ success: true, id });
+      res.json({ success: true, id, priceChangeNotificationId: createdInfoId });
     } catch (err: any) {
       res.status(500).json({ error: 'تعذر حفظ المنتج' });
     }
@@ -1484,8 +1597,8 @@ async function startServer() {
     }
   });
 
-  // PATCH Toggle Deal Active State (Admin Only)
-  app.patch('/api/deals/:id/toggle', requireAdmin, async (req: Request, res: Response) => {
+  // PATCH / PUT Toggle Deal Active State (Admin Only)
+  const handleDealToggle = async (req: Request, res: Response) => {
     try {
       const { id } = req.params;
       const db = await getDb();
@@ -1495,7 +1608,9 @@ async function startServer() {
     } catch (err: any) {
       res.status(500).json({ error: 'تعذر تغيير حالة العرض' });
     }
-  });
+  };
+  app.patch('/api/deals/:id/toggle', requireAdmin, handleDealToggle);
+  app.put('/api/deals/:id/toggle', requireAdmin, handleDealToggle);
 
   // DELETE Deal (Admin Only)
   app.delete('/api/deals/:id', requireAdmin, async (req: Request, res: Response) => {
@@ -1510,110 +1625,522 @@ async function startServer() {
     }
   });
 
-  // GET Bestsellers Endpoint (⭐ الأكثر طلباً) - Calculated directly from real order history in DB
-  app.get('/api/products/bestsellers', async (req: Request, res: Response) => {
+  // ==========================================
+  // 3.6. INFORMATION & NOTIFICATIONS SYSTEM (🔔 مركز المعلومات والتنبيهات)
+  // ==========================================
+
+  // GET Information (Admin gets all with read stats; Customer gets targeted published items with isRead)
+  app.get('/api/information', async (req: Request, res: Response) => {
     try {
       const authUser = await getAuthUser(req);
       const isAdmin = authUser?.role === 'admin';
       const db = await getDb();
-      const sysSettings = await getSystemConfig(db);
-      const shouldHidePrices = !isAdmin && Boolean(sysSettings?.hidePrices);
+      const { type, status, priority, search } = req.query;
 
-      // Query real bestsellers from order_items aggregated over completed/active orders
-      const bestRes = db.exec(`
-        SELECT oi.productId, SUM(oi.quantity) as totalSold, COUNT(DISTINCT oi.orderId) as ordersCount
-        FROM order_items oi
-        JOIN orders o ON oi.orderId = o.id
-        WHERE o.status != 'Cancelled'
-        GROUP BY oi.productId
-        ORDER BY totalSold DESC, ordersCount DESC
-        LIMIT 10
-      `);
+      const totalCustomersRes = db.exec(`SELECT COUNT(*) FROM users WHERE role = 'customer'`);
+      const totalCustomersCount = (totalCustomersRes[0]?.values[0]?.[0] as number) || 0;
 
-      const bestProductIds: Array<{ productId: string; totalSold: number }> = [];
-      if (bestRes.length > 0 && bestRes[0].values) {
-        for (const row of bestRes[0].values) {
-          bestProductIds.push({
-            productId: String(row[0]),
-            totalSold: Number(row[1]),
+      let sql = 'SELECT * FROM information WHERE 1=1';
+      const params: any[] = [];
+
+      if (!isAdmin) {
+        // Customer visibility rules: only published, non-expired, and addressed to all or this user
+        sql += " AND status = 'published'";
+        if (authUser) {
+          sql += " AND (targetType = 'all' OR targetId = ? OR targetId IS NULL OR targetId = '')";
+          params.push(authUser.id);
+        } else {
+          sql += " AND targetType = 'all'";
+        }
+      } else {
+        // Admin filtering
+        if (status && status !== 'all') {
+          sql += ' AND status = ?';
+          params.push(String(status));
+        }
+      }
+
+      if (type && type !== 'all') {
+        sql += ' AND type = ?';
+        params.push(String(type));
+      }
+
+      if (priority && priority !== 'all') {
+        sql += ' AND priority = ?';
+        params.push(String(priority));
+      }
+
+      if (search && typeof search === 'string' && search.trim()) {
+        const q = `%${search.trim().toLowerCase()}%`;
+        sql += ' AND (LOWER(title) LIKE ? OR LOWER(content) LIKE ? OR LOWER(productName) LIKE ?)';
+        params.push(q, q, q);
+      }
+
+      sql += ' ORDER BY publishedAt DESC, createdAt DESC';
+
+      const resStmt = db.exec(sql, params);
+      const items: InformationItem[] = [];
+      let unreadCount = 0;
+
+      if (resStmt.length > 0 && resStmt[0].values) {
+        const nowIso = new Date().toISOString();
+
+        for (const row of resStmt[0].values) {
+          const id = String(row[0]);
+          const title = String(row[1]);
+          const content = String(row[2]);
+          const itemType = (row[3] as InformationType) || 'general';
+          const itemPriority = (row[4] as InformationPriority) || 'normal';
+          const targetType = (row[5] as any) || 'all';
+          const targetId = row[6] ? String(row[6]) : null;
+          const targetName = row[7] ? String(row[7]) : null;
+          const productId = row[8] ? String(row[8]) : null;
+          const productName = row[9] ? String(row[9]) : null;
+          const productImage = row[10] ? String(row[10]) : null;
+          const productUnit = row[11] ? String(row[11]) : null;
+          const oldPrice = row[12] !== null && row[12] !== undefined ? Number(row[12]) : null;
+          const newPrice = row[13] !== null && row[13] !== undefined ? Number(row[13]) : null;
+          const priceChangePercentage = row[14] !== null && row[14] !== undefined ? Number(row[14]) : null;
+          const itemStatus = (row[15] as InformationStatus) || 'published';
+          const publishedAt = String(row[16]);
+          const expiresAt = row[17] ? String(row[17]) : null;
+          const createdBy = row[18] ? String(row[18]) : 'إدارة الشركة';
+          const createdAt = String(row[19]);
+          const updatedAt = String(row[20] || row[19]);
+
+          // Check if expired for customers
+          if (!isAdmin && expiresAt && expiresAt < nowIso) {
+            continue;
+          }
+
+          // Check read status for current authenticated user
+          let isRead = false;
+          let readAt: string | null = null;
+          let readCount = 0;
+
+          if (authUser) {
+            const readStmt = db.prepare('SELECT readAt FROM information_reads WHERE informationId = ? AND userId = ?');
+            readStmt.bind([id, authUser.id]);
+            if (readStmt.step()) {
+              isRead = true;
+              const rObj = readStmt.getAsObject();
+              readAt = String(rObj.readAt || '');
+            }
+            readStmt.free();
+
+            if (!isRead && itemStatus === 'published') {
+              unreadCount++;
+            }
+          }
+
+          // Get total read count for admin
+          if (isAdmin) {
+            const countStmt = db.prepare('SELECT COUNT(*) as cnt FROM information_reads WHERE informationId = ?');
+            countStmt.bind([id]);
+            if (countStmt.step()) {
+              readCount = Number(countStmt.getAsObject().cnt) || 0;
+            }
+            countStmt.free();
+          }
+
+          items.push({
+            id,
+            title,
+            content,
+            type: itemType,
+            priority: itemPriority,
+            targetType,
+            targetId,
+            targetName,
+            productId,
+            productName,
+            productImage,
+            productUnit,
+            oldPrice,
+            newPrice,
+            priceChangePercentage,
+            status: itemStatus,
+            publishedAt,
+            expiresAt,
+            createdBy,
+            createdAt,
+            updatedAt,
+            isRead,
+            readAt,
+            readCount,
+            totalTargetCount: targetType === 'all' ? totalCustomersCount : 1,
           });
         }
       }
 
-      // Fetch product details for bestsellers
-      const bestsellers: Array<Product & { totalSold?: number; activeDeal?: DealOffer | null }> = [];
-      const addedIds = new Set<string>();
+      res.json({
+        success: true,
+        information: items,
+        unreadCount,
+        totalCount: items.length,
+      });
+    } catch (err: any) {
+      console.error('Error fetching information:', err);
+      res.status(500).json({ success: false, error: 'تعذر جلب سجلات المعلومات والتنبيهات' });
+    }
+  });
 
-      for (const item of bestProductIds) {
-        const pStmt = db.prepare('SELECT * FROM products WHERE id = ? AND status != "hidden"');
-        pStmt.bind([item.productId]);
+  // GET Quick Unread Count for Authenticated User
+  app.get('/api/information/unread-count', async (req: Request, res: Response) => {
+    try {
+      const authUser = await getAuthUser(req);
+      if (!authUser) {
+        return res.json({ success: true, unreadCount: 0 });
+      }
+
+      const db = await getDb();
+      const nowIso = new Date().toISOString();
+
+      const stmt = db.prepare(`
+        SELECT COUNT(*) as unreadCount 
+        FROM information i
+        WHERE i.status = 'published'
+          AND (i.targetType = 'all' OR i.targetId = ? OR i.targetId IS NULL OR i.targetId = '')
+          AND (i.expiresAt IS NULL OR i.expiresAt > ?)
+          AND i.id NOT IN (
+            SELECT informationId FROM information_reads WHERE userId = ?
+          )
+      `);
+      stmt.bind([authUser.id, nowIso, authUser.id]);
+
+      let unreadCount = 0;
+      if (stmt.step()) {
+        unreadCount = Number(stmt.getAsObject().unreadCount) || 0;
+      }
+      stmt.free();
+
+      res.json({ success: true, unreadCount });
+    } catch (err: any) {
+      res.json({ success: true, unreadCount: 0 });
+    }
+  });
+
+  // POST Create New Information (Admin Only)
+  app.post('/api/information', requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const {
+        title,
+        content,
+        type = 'general',
+        priority = 'normal',
+        targetType = 'all',
+        targetId,
+        targetName,
+        productId,
+        productName,
+        productImage,
+        productUnit,
+        oldPrice,
+        newPrice,
+        priceChangePercentage,
+        status = 'published',
+        publishedAt,
+        expiresAt,
+      } = req.body;
+
+      const adminUser = (req as any).user;
+      const cleanTitle = String(title || '').trim();
+      const cleanContent = String(content || '').trim();
+
+      if (!cleanTitle || !cleanContent) {
+        return res.status(400).json({ success: false, error: 'عنوان ونص المعلومة مطلوبان' });
+      }
+
+      const db = await getDb();
+      const nowIso = new Date().toISOString();
+      const infoId = 'info_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7);
+
+      // If productId is provided, hydrate product details if missing
+      let finalProdName = productName || null;
+      let finalProdImage = productImage || null;
+      let finalProdUnit = productUnit || null;
+      let finalOldPrice = oldPrice !== undefined ? Number(oldPrice) : null;
+      let finalNewPrice = newPrice !== undefined ? Number(newPrice) : null;
+      let finalPct = priceChangePercentage !== undefined ? Number(priceChangePercentage) : null;
+
+      if (productId) {
+        const pStmt = db.prepare('SELECT name, image, unit, price FROM products WHERE id = ?');
+        pStmt.bind([productId]);
         if (pStmt.step()) {
-          const row = pStmt.getAsObject();
-          const pId = String(row.id);
-          addedIds.add(pId);
-          const activeDeal = getActiveDealForProduct(db, pId);
-          bestsellers.push({
-            id: pId,
-            name: String(row.name),
-            category: String(row.category),
-            price: shouldHidePrices ? 0 : (activeDeal ? activeDeal.offerPrice : Number(row.price)),
-            unit: String(row.unit),
-            image: String(row.image),
-            status: row.status as any,
-            minQty: Number(row.minQty ?? 1),
-            maxQty: row.maxQty !== null && row.maxQty !== undefined ? Number(row.maxQty) : null,
-            stock: Number(row.stock ?? 100),
-            lowStockThreshold: Number(row.lowStockThreshold ?? 5),
-            description: row.description ? String(row.description) : undefined,
-            totalSold: item.totalSold,
-            activeDeal: activeDeal ? {
-              ...activeDeal,
-              offerPrice: shouldHidePrices ? 0 : activeDeal.offerPrice,
-              originalPrice: shouldHidePrices ? 0 : activeDeal.originalPrice,
-            } : null,
-          });
+          const pObj = pStmt.getAsObject();
+          finalProdName = finalProdName || String(pObj.name || '');
+          finalProdImage = finalProdImage || String(pObj.image || '');
+          finalProdUnit = finalProdUnit || String(pObj.unit || '');
+          if (finalNewPrice === null && pObj.price !== undefined) {
+            finalNewPrice = Number(pObj.price);
+          }
         }
         pStmt.free();
       }
 
-      // If fewer than 6 bestsellers from order history, augment with top open products from catalog
-      if (bestsellers.length < 6) {
-        const catRes = db.exec('SELECT * FROM products WHERE status = "open" LIMIT 8');
-        if (catRes.length > 0 && catRes[0].values) {
-          for (const row of catRes[0].values) {
-            const pId = String(row[0]);
-            if (!addedIds.has(pId) && bestsellers.length < 8) {
-              addedIds.add(pId);
-              const activeDeal = getActiveDealForProduct(db, pId);
-              bestsellers.push({
-                id: pId,
-                name: String(row[1]),
-                category: String(row[2]),
-                price: shouldHidePrices ? 0 : (activeDeal ? activeDeal.offerPrice : Number(row[3])),
-                unit: String(row[4]),
-                image: String(row[5]),
-                status: row[6] as any,
-                minQty: Number(row[7] ?? 1),
-                maxQty: row[8] !== null && row[8] !== undefined ? Number(row[8]) : null,
-                stock: Number(row[9] ?? 100),
-                lowStockThreshold: Number(row[10] ?? 5),
-                description: row[11] ? String(row[11]) : undefined,
-                totalSold: 25 + Math.floor(Math.random() * 50),
-                activeDeal: activeDeal ? {
-                  ...activeDeal,
-                  offerPrice: shouldHidePrices ? 0 : activeDeal.offerPrice,
-                  originalPrice: shouldHidePrices ? 0 : activeDeal.originalPrice,
-                } : null,
-              });
-            }
-          }
-        }
+      if (finalOldPrice !== null && finalNewPrice !== null && finalPct === null && finalOldPrice > 0) {
+        finalPct = Math.round(((finalNewPrice - finalOldPrice) / finalOldPrice) * 100);
       }
 
-      res.json(bestsellers);
+      db.run(`
+        INSERT INTO information (
+          id, title, content, type, priority, targetType, targetId, targetName,
+          productId, productName, productImage, productUnit, oldPrice, newPrice, priceChangePercentage,
+          status, publishedAt, expiresAt, createdBy, createdAt, updatedAt
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `, [
+        infoId,
+        cleanTitle,
+        cleanContent,
+        type,
+        priority,
+        targetType,
+        targetId || null,
+        targetName || null,
+        productId || null,
+        finalProdName,
+        finalProdImage,
+        finalProdUnit,
+        finalOldPrice,
+        finalNewPrice,
+        finalPct,
+        status,
+        publishedAt || nowIso,
+        expiresAt || null,
+        adminUser?.fullName || 'إدارة شركة الحليم',
+        nowIso,
+        nowIso,
+      ]);
+
+      saveDb();
+
+      logSecurityEvent(
+        db,
+        'INFORMATION_CREATED',
+        adminUser?.id,
+        adminUser?.username,
+        getClientIp(req),
+        `Information "${cleanTitle}" created (${type})`
+      );
+
+      res.json({
+        success: true,
+        message: 'تم نشر المعلومة بنجاح',
+        id: infoId,
+      });
     } catch (err: any) {
-      console.error('Error fetching bestsellers:', err);
-      res.status(500).json({ error: 'تعذر جلب قائمة الأكثر طلباً' });
+      console.error('Error creating information:', err);
+      res.status(500).json({ success: false, error: 'تعذر إنشاء ونشر المعلومة' });
+    }
+  });
+
+  // PUT Update Information (Admin Only)
+  app.put('/api/information/:id', requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const {
+        title,
+        content,
+        type,
+        priority,
+        targetType,
+        targetId,
+        targetName,
+        productId,
+        productName,
+        productImage,
+        productUnit,
+        oldPrice,
+        newPrice,
+        priceChangePercentage,
+        status,
+        publishedAt,
+        expiresAt,
+      } = req.body;
+
+      const adminUser = (req as any).user;
+      const cleanTitle = String(title || '').trim();
+      const cleanContent = String(content || '').trim();
+
+      if (!cleanTitle || !cleanContent) {
+        return res.status(400).json({ success: false, error: 'عنوان ونص المعلومة مطلوبان' });
+      }
+
+      const db = await getDb();
+      const nowIso = new Date().toISOString();
+
+      db.run(`
+        UPDATE information SET
+          title = ?,
+          content = ?,
+          type = ?,
+          priority = ?,
+          targetType = ?,
+          targetId = ?,
+          targetName = ?,
+          productId = ?,
+          productName = ?,
+          productImage = ?,
+          productUnit = ?,
+          oldPrice = ?,
+          newPrice = ?,
+          priceChangePercentage = ?,
+          status = ?,
+          publishedAt = ?,
+          expiresAt = ?,
+          updatedAt = ?
+        WHERE id = ?
+      `, [
+        cleanTitle,
+        cleanContent,
+        type || 'general',
+        priority || 'normal',
+        targetType || 'all',
+        targetId || null,
+        targetName || null,
+        productId || null,
+        productName || null,
+        productImage || null,
+        productUnit || null,
+        oldPrice !== undefined ? Number(oldPrice) : null,
+        newPrice !== undefined ? Number(newPrice) : null,
+        priceChangePercentage !== undefined ? Number(priceChangePercentage) : null,
+        status || 'published',
+        publishedAt || nowIso,
+        expiresAt || null,
+        nowIso,
+        id,
+      ]);
+
+      saveDb();
+
+      logSecurityEvent(
+        db,
+        'INFORMATION_UPDATED',
+        adminUser?.id,
+        adminUser?.username,
+        getClientIp(req),
+        `Information "${cleanTitle}" updated`
+      );
+
+      res.json({ success: true, message: 'تم تحديث المعلومة بنجاح', id });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: 'تعذر تحديث المعلومة' });
+    }
+  });
+
+  // PATCH / PUT Quick Toggle Information Status (Admin Only)
+  const handleInfoStatusChange = async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const { status } = req.body;
+      if (!['draft', 'published', 'archived'].includes(status)) {
+        return res.status(400).json({ success: false, error: 'حالة المعلومة غير صحيحة' });
+      }
+
+      const db = await getDb();
+      const nowIso = new Date().toISOString();
+      db.run('UPDATE information SET status = ?, updatedAt = ? WHERE id = ?', [status, nowIso, id]);
+      saveDb();
+
+      res.json({ success: true, message: 'تم تغيير حالة المعلومة بنجاح', status });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: 'تعذر تعديل حالة المعلومة' });
+    }
+  };
+  app.patch('/api/information/:id/status', requireAdmin, handleInfoStatusChange);
+  app.put('/api/information/:id/status', requireAdmin, handleInfoStatusChange);
+
+  // DELETE Information (Admin Only)
+  app.delete('/api/information/:id', requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const adminUser = (req as any).user;
+      const db = await getDb();
+
+      db.run('DELETE FROM information WHERE id = ?', [id]);
+      db.run('DELETE FROM information_reads WHERE informationId = ?', [id]);
+      saveDb();
+
+      logSecurityEvent(
+        db,
+        'INFORMATION_DELETED',
+        adminUser?.id,
+        adminUser?.username,
+        getClientIp(req),
+        `Information ${id} deleted`
+      );
+
+      res.json({ success: true, message: 'تم حذف المعلومة وسجل قراءاتها بنجاح' });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: 'تعذر حذف المعلومة' });
+    }
+  });
+
+  // POST Mark Single Information Item as Read (Auth User)
+  app.post('/api/information/:id/read', requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const user = (req as any).user as User;
+      const db = await getDb();
+      const readId = 'read_' + user.id + '_' + id;
+      const nowIso = new Date().toISOString();
+
+      db.run(
+        `INSERT OR REPLACE INTO information_reads (id, informationId, userId, readAt) VALUES (?, ?, ?, ?)`,
+        [readId, id, user.id, nowIso]
+      );
+      saveDb();
+
+      res.json({ success: true, isRead: true, readAt: nowIso });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: 'تعذر تسجيل قراءة المعلومة' });
+    }
+  });
+
+  // POST Mark All Information as Read (Auth User)
+  app.post('/api/information/read-all', requireAuth, async (req: Request, res: Response) => {
+    try {
+      const user = (req as any).user as User;
+      const db = await getDb();
+      const nowIso = new Date().toISOString();
+
+      // Find all published info IDs that this user can see and has not read
+      const stmt = db.prepare(`
+        SELECT i.id 
+        FROM information i
+        WHERE i.status = 'published'
+          AND (i.targetType = 'all' OR i.targetId = ? OR i.targetId IS NULL OR i.targetId = '')
+          AND (i.expiresAt IS NULL OR i.expiresAt > ?)
+          AND i.id NOT IN (
+            SELECT informationId FROM information_reads WHERE userId = ?
+          )
+      `);
+      stmt.bind([user.id, nowIso, user.id]);
+
+      const unreadIds: string[] = [];
+      while (stmt.step()) {
+        unreadIds.push(String(stmt.getAsObject().id));
+      }
+      stmt.free();
+
+      for (const infoId of unreadIds) {
+        const readId = 'read_' + user.id + '_' + infoId;
+        db.run(
+          `INSERT OR REPLACE INTO information_reads (id, informationId, userId, readAt) VALUES (?, ?, ?, ?)`,
+          [readId, infoId, user.id, nowIso]
+        );
+      }
+
+      saveDb();
+
+      res.json({
+        success: true,
+        message: 'تم تحديد كافة المعلومات كمقروءة بنجاح',
+        markedCount: unreadIds.length,
+      });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: 'تعذر تحديد الكل كمقروء' });
     }
   });
 
@@ -3757,7 +4284,7 @@ async function startServer() {
   app.post('/api/customers/:id/full-collection', requireAdmin, handleFullDebtSettlement);
 
   // GET Admin Customers List with Aggregated Stats (Admin Only)
-  app.get('/api/admin/customers', requireAdmin, async (req: Request, res: Response) => {
+  const handleGetAdminCustomers = async (req: Request, res: Response) => {
     try {
       const db = await getDb();
       const usersRes = db.exec(
@@ -3820,7 +4347,10 @@ async function startServer() {
       console.error('Error fetching admin customers:', err);
       res.status(500).json({ error: 'تعذر جلب قائمة العملاء' });
     }
-  });
+  };
+
+  app.get('/api/admin/customers', requireAdmin, handleGetAdminCustomers);
+  app.get('/api/customers', requireAdmin, handleGetAdminCustomers);
 
   // PUT Toggle / Update Customer Status (Active / Disabled) (Admin Only)
   app.put('/api/admin/customers/:id/status', requireAdmin, async (req: Request, res: Response) => {
@@ -3900,6 +4430,95 @@ async function startServer() {
       res.json(payments);
     } catch (err: any) {
       res.status(500).json({ error: 'تعذر جلب سجل المدفوعات' });
+    }
+  });
+
+  // POST Payment / Collection (Admin Only - Supports payments payload)
+  app.post('/api/payments', requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const { customerId, customerName, customerPhone, amount, paymentMethod, notes, collectedBy } = req.body;
+      const payAmount = Number(amount) || 0;
+
+      if (!customerId || payAmount <= 0) {
+        return res.status(400).json({ success: false, error: 'بيانات الدفعة غير مكتملة أو المبلغ غير صحيح' });
+      }
+
+      const db = await getDb();
+      const nowStr = new Date().toLocaleString('ar-EG', {
+        dateStyle: 'short',
+        timeStyle: 'short',
+      });
+      const nowIso = new Date().toISOString();
+
+      // Find customer info
+      let cName = customerName || '';
+      let cPhone = customerPhone || '';
+      const userStmt = db.prepare('SELECT fullName, phone FROM users WHERE id = ?');
+      userStmt.bind([customerId]);
+      if (userStmt.step()) {
+        const u = userStmt.getAsObject();
+        if (!cName) cName = String(u.fullName || '');
+        if (!cPhone) cPhone = String(u.phone || '');
+      }
+      userStmt.free();
+
+      // Insert payment record
+      const payId = `pay-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+      db.run(
+        `INSERT INTO payments (id, customerId, customerName, customerPhone, amount, paymentDate, paymentMethod, collectedBy, notes, createdAt)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          payId,
+          customerId,
+          cName || 'عميل',
+          cPhone || '',
+          payAmount,
+          nowStr,
+          paymentMethod || 'Cash',
+          collectedBy || 'محمد فوزي (المندوب)',
+          notes || 'تسجيل دفعة نقدية',
+          nowIso,
+        ]
+      );
+
+      // FIFO allocation across open unpaid orders
+      const ordersRes = db.exec(
+        'SELECT id, orderNumber, grandTotal, paidAmount, remainingBalance FROM orders WHERE (customerId = ? OR customerPhone = ?) AND remainingBalance > 0 AND status != "Cancelled" ORDER BY createdAt ASC',
+        [customerId, cPhone || customerId]
+      );
+
+      let remainingToAllocate = payAmount;
+      if (ordersRes.length > 0 && ordersRes[0].values) {
+        for (const row of ordersRes[0].values) {
+          if (remainingToAllocate <= 0) break;
+          const oId = String(row[0]);
+          const curPaid = Number(row[3] || 0);
+          const curRem = Number(row[4] || 0);
+
+          const alloc = Math.min(remainingToAllocate, curRem);
+          const newPaid = curPaid + alloc;
+          const newRem = Math.max(0, curRem - alloc);
+          const newStatus = newRem === 0 ? 'Paid' : 'Partial';
+
+          db.run(
+            'UPDATE orders SET paidAmount = ?, remainingBalance = ?, paymentStatus = ?, updatedAt = ? WHERE id = ?',
+            [newPaid, newRem, newStatus, nowIso, oId]
+          );
+
+          remainingToAllocate -= alloc;
+        }
+      }
+
+      saveDb();
+
+      res.json({
+        success: true,
+        message: 'تم تسجيل الدفعة وتحديث الحساب بنجاح',
+        paymentId: payId,
+      });
+    } catch (err: any) {
+      console.error('Error recording payment:', err);
+      res.status(500).json({ success: false, error: 'تعذر تسجيل الدفعة' });
     }
   });
 

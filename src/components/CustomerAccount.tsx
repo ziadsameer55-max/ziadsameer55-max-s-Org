@@ -301,6 +301,8 @@ export const CustomerAccount: React.FC<CustomerAccountProps> = ({
     });
   }, [myOrders, paymentsList]);
 
+  const isPricesHidden = user?.role !== 'admin' && Boolean(settings?.hidePrices);
+
   return (
     <div className="max-w-2xl mx-auto space-y-3.5 pb-28 text-right px-1" dir="rtl">
       {/* Print Statement Modal */}
@@ -558,7 +560,11 @@ export const CustomerAccount: React.FC<CustomerAccountProps> = ({
                     <div className="flex items-center gap-2">
                       <div className="text-left">
                         <div className="text-sm font-black text-emerald-800 font-mono">
-                          {order.grandTotal.toLocaleString('ar-EG')} ج.م
+                          {!isPricesHidden && order.grandTotal > 0 ? (
+                            `${order.grandTotal.toLocaleString('ar-EG')} ج.م`
+                          ) : (
+                            <span className="text-[11px] text-slate-500 font-sans font-bold">🔒 تسعير معتمد</span>
+                          )}
                         </div>
                       </div>
                       {isExpanded ? (
@@ -586,7 +592,11 @@ export const CustomerAccount: React.FC<CustomerAccountProps> = ({
                               {item.productName} ({item.quantity} {item.unit || 'كرتونة'})
                             </span>
                             <span className="font-mono text-slate-700">
-                              {item.totalPrice.toLocaleString('ar-EG')} ج.م
+                              {!isPricesHidden && item.totalPrice > 0 ? (
+                                `${item.totalPrice.toLocaleString('ar-EG')} ج.م`
+                              ) : (
+                                `${item.quantity} ${item.unit || 'كرتونة'}`
+                              )}
                             </span>
                           </div>
                         ))}

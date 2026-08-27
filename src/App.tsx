@@ -23,12 +23,13 @@ import { AdminDebtsManager } from './components/AdminDebtsManager';
 import { AdminCollectionsReport } from './components/AdminCollectionsReport';
 import { AdminProductsManager } from './components/AdminProductsManager';
 import { AdminDealsManager } from './components/AdminDealsManager';
+import { AdminInformationManager } from './components/AdminInformationManager';
+import { CustomerInformationModal } from './components/CustomerInformationModal';
 import { AdminSettings } from './components/AdminSettings';
 import { AdminOrderEditModal } from './components/AdminOrderEditModal';
 import { PrintReceiptModal } from './components/PrintReceiptModal';
 import { LoginPage } from './components/LoginPage';
 import { RegisterPage } from './components/RegisterPage';
-import { ForgotPasswordPage } from './components/ForgotPasswordPage';
 import { LoginModal } from './components/LoginModal';
 import { AIAssistant } from './components/AIAssistant';
 import {
@@ -68,7 +69,6 @@ export default function App() {
   const [categories, setCategories] = useState<Category[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
   const [deals, setDeals] = useState<DealOffer[]>([]);
-  const [bestsellers, setBestsellers] = useState<Product[]>([]);
   
   // Active route / tab with strict initial check
   const [activeTab, setActiveTabState] = useState<string>(() => {
@@ -153,6 +153,8 @@ export default function App() {
   // Modals & Bottom Sheets
   const [isCartOpen, setIsCartOpen] = useState(false);
   const [isLoginOpen, setIsLoginOpen] = useState(false);
+  const [isCustomerInfoOpen, setIsCustomerInfoOpen] = useState(false);
+  const [unreadInfoCount, setUnreadInfoCount] = useState(0);
   const [submittedOrder, setSubmittedOrder] = useState<Order | null>(null);
   const [editingOrder, setEditingOrder] = useState<Order | null>(null);
   const [printingOrder, setPrintingOrder] = useState<Order | null>(null);
@@ -367,15 +369,20 @@ export default function App() {
         console.error('Failed to load deals:', err);
       }
 
-      // 6. Bestsellers (الأكثر طلباً)
+      // 6. Information & Notifications
       try {
-        const bestsellersRes = await apiFetch('/api/products/bestsellers?limit=8');
-        if (bestsellersRes.ok) {
-          const bData = await bestsellersRes.json();
-          setBestsellers(Array.isArray(bData) ? bData : []);
+        const token = localStorage.getItem('halim_session_token');
+        const headers: Record<string, string> = {};
+        if (token) headers['Authorization'] = `Bearer ${token}`;
+        const infoRes = await apiFetch('/api/information', { headers });
+        if (infoRes.ok) {
+          const iData = await infoRes.json();
+          const items = Array.isArray(iData.information) ? iData.information : [];
+          const unread = items.filter((i: any) => !i.isRead).length;
+          setUnreadInfoCount(unread);
         }
       } catch (err) {
-        console.error('Failed to load bestsellers:', err);
+        console.error('Failed to load information items:', err);
       }
     } catch (err) {
       console.error('Failed to load initial data from server:', err);
@@ -535,28 +542,6 @@ export default function App() {
       );
     }
 
-    if (activeTab === 'forgot-password') {
-      return (
-        <div dir="rtl">
-          {toast && (
-            <div className="fixed top-6 left-1/2 -translate-x-1/2 z-50 animate-bounce no-print">
-              <div
-                className={`px-4 py-2.5 rounded-2xl shadow-xl border text-xs font-bold flex items-center gap-2 ${
-                  toast.type === 'success'
-                    ? 'bg-emerald-800 text-white border-emerald-700'
-                    : 'bg-red-700 text-white border-red-600'
-                }`}
-              >
-                <CheckCircle2 className="w-4 h-4 shrink-0" />
-                <span>{toast.message}</span>
-              </div>
-            </div>
-          )}
-          <ForgotPasswordPage onNavigate={navigateTo} />
-        </div>
-      );
-    }
-
     // Default to Standalone LoginPage
     return (
       <div dir="rtl">
@@ -641,6 +626,7 @@ export default function App() {
                       {activeTab === 'admin-collections' && '💰 التحصيل والمقبوضات'}
                       {activeTab === 'admin-products' && '📦 إدارة المنتجات والتسعير'}
                       {activeTab === 'admin-deals' && '🔥 إدارة العروض والخصومات'}
+                      {activeTab === 'admin-information' && '🔔 إدارة المعلومات والتنبيهات'}
                       {activeTab === 'admin-settings' && '⚙️ إعدادات النظام والمتجر'}
                     </h1>
                     <span className="text-[10px] text-slate-400 hidden sm:inline-block">
@@ -696,6 +682,7 @@ export default function App() {
 
               {activeTab === 'admin-debts' && (
                 <AdminDebtsManager
+                  settings={settings}
                   onOpenOrderDetails={(orderId) => {
                     const ord = orders.find((o) => o.id === orderId);
                     if (ord) setEditingOrder(ord);
@@ -724,6 +711,13 @@ export default function App() {
                 />
               )}
 
+              {activeTab === 'admin-information' && (
+                <AdminInformationManager
+                  products={products}
+                  onRefreshGlobal={fetchData}
+                />
+              )}
+
               {activeTab === 'admin-settings' && (
                 <AdminSettings settings={settings} onSaveSettings={handleSaveSettings} />
               )}
@@ -744,8 +738,10 @@ export default function App() {
               setActiveTab={setActiveTab}
               cartCount={cart.length}
               unpaidDebt={customerUnpaidDebt}
+              unreadInfoCount={unreadInfoCount}
               onOpenCart={() => setIsCartOpen(true)}
               onOpenLogin={() => setIsLoginOpen(true)}
+              onOpenInformation={() => setIsCustomerInfoOpen(true)}
               onLogout={handleLogout}
             />
 
@@ -760,7 +756,6 @@ export default function App() {
                   user={user}
                   orders={orders}
                   deals={deals}
-                  bestsellers={bestsellers}
                   isStoreOpen={isStoreOpen}
                   cart={cart}
                   favorites={favorites}
@@ -925,6 +920,23 @@ export default function App() {
           settings={settings}
         />
       )}
+
+      {/* Customer Information & Notification Center Modal */}
+      <CustomerInformationModal
+        isOpen={isCustomerInfoOpen}
+        onClose={() => {
+          setIsCustomerInfoOpen(false);
+          fetchData();
+        }}
+        user={user}
+        products={products}
+        onAddToCart={handleUpdateCartItem}
+        onOpenCart={() => {
+          setIsCustomerInfoOpen(false);
+          setIsCartOpen(true);
+        }}
+        onUnreadCountChange={(count) => setUnreadInfoCount(count)}
+      />
     </div>
   );
 }

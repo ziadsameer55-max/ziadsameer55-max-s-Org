@@ -46,5 +46,12 @@ export async function apiFetch(input: RequestInfo | URL, init?: RequestInit): Pr
   } catch {}
   finalInit.headers = headers;
 
-  return fetch(input, finalInit);
+  // Resolve base URL if VITE_API_URL is configured (e.g. production external backend)
+  let targetUrl: RequestInfo | URL = input;
+  const baseUrl = (import.meta.env.VITE_API_URL || '').replace(/\/+$/, '');
+  if (typeof input === 'string' && baseUrl && input.startsWith('/')) {
+    targetUrl = `${baseUrl}${input}`;
+  }
+
+  return fetch(targetUrl, finalInit);
 }

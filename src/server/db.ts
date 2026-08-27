@@ -350,29 +350,32 @@ export function checkLoginLockout(
       }
     }
 
-    // 2. IP-wide brute force lockout: 25 failed attempts across multiple accounts from the same IP
-    const ipStmt = database.prepare(`
-      SELECT COUNT(*) as failedCount, MAX(attemptTime) as lastAttempt
-      FROM login_attempts
-      WHERE ip = ? AND success = 0 AND attemptTime >= ?
-    `);
-    ipStmt.bind([cleanIp, thresholdTime]);
+    // 2. IP-wide brute force lockout: 30 failed attempts from external non-loopback IP
+    const isLoopback = cleanIp === '127.0.0.1' || cleanIp === '::1' || cleanIp === 'localhost';
+    if (!isLoopback) {
+      const ipStmt = database.prepare(`
+        SELECT COUNT(*) as failedCount, MAX(attemptTime) as lastAttempt
+        FROM login_attempts
+        WHERE ip = ? AND success = 0 AND attemptTime >= ?
+      `);
+      ipStmt.bind([cleanIp, thresholdTime]);
 
-    if (ipStmt.step()) {
-      const row = ipStmt.getAsObject();
-      ipStmt.free();
-      const failedCount = Number(row.failedCount) || 0;
-      const lastAttempt = Number(row.lastAttempt) || 0;
+      if (ipStmt.step()) {
+        const row = ipStmt.getAsObject();
+        ipStmt.free();
+        const failedCount = Number(row.failedCount) || 0;
+        const lastAttempt = Number(row.lastAttempt) || 0;
 
-      if (failedCount >= 25) {
-        const lockoutEnd = lastAttempt + windowMs;
-        if (now < lockoutEnd) {
-          const remainingMinutes = Math.ceil((lockoutEnd - now) / 60000);
-          return { isLocked: true, remainingMinutes: Math.max(1, remainingMinutes) };
+        if (failedCount >= 30) {
+          const lockoutEnd = lastAttempt + windowMs;
+          if (now < lockoutEnd) {
+            const remainingMinutes = Math.ceil((lockoutEnd - now) / 60000);
+            return { isLocked: true, remainingMinutes: Math.max(1, remainingMinutes) };
+          }
         }
+      } else {
+        ipStmt.free();
       }
-    } else {
-      ipStmt.free();
     }
   } catch (err) {
     console.error('Error checking login lockout:', err);
@@ -629,6 +632,38 @@ export async function initSchema(database: Database): Promise<void> {
       usedAt INTEGER,
       createdAt TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS information (
+      id TEXT PRIMARY KEY,
+      title TEXT NOT NULL,
+      content TEXT NOT NULL,
+      type TEXT NOT NULL,
+      priority TEXT DEFAULT 'normal',
+      targetType TEXT DEFAULT 'all',
+      targetId TEXT,
+      targetName TEXT,
+      productId TEXT,
+      productName TEXT,
+      productImage TEXT,
+      productUnit TEXT,
+      oldPrice REAL,
+      newPrice REAL,
+      priceChangePercentage REAL,
+      status TEXT DEFAULT 'published',
+      publishedAt TEXT NOT NULL,
+      expiresAt TEXT,
+      createdBy TEXT,
+      createdAt TEXT NOT NULL,
+      updatedAt TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS information_reads (
+      id TEXT PRIMARY KEY,
+      informationId TEXT NOT NULL,
+      userId TEXT NOT NULL,
+      readAt TEXT NOT NULL,
+      UNIQUE(informationId, userId)
+    );
   `);
 
   // Safe migration check for existing users table columns
@@ -671,6 +706,75 @@ export async function initSchema(database: Database): Promise<void> {
     }
   } catch (err) {
     console.error('Error updating settings address:', err);
+  }
+
+  // Seed sample initial information if none exists
+  try {
+    const infoCount = database.exec(`SELECT COUNT(*) FROM information`);
+    const count = (infoCount[0]?.values[0]?.[0] as number) || 0;
+    if (count === 0) {
+      const now = new Date().toISOString();
+      const stmt = database.prepare(`
+        INSERT INTO information (
+          id, title, content, type, priority, targetType, targetId, targetName,
+          productId, productName, productImage, productUnit, oldPrice, newPrice, priceChangePercentage,
+          status, publishedAt, expiresAt, createdBy, createdAt, updatedAt
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+
+      stmt.run([
+        'info-welcome-1',
+        'مرحباً بكم في منصة شركة الحليم للتجارة والتوزيع 🌟',
+        'يسر إدارة شركة الحليم للتجارة والتوزيع ومندوب المبيعات محمد فوزي الترحيب بكم في منصة طلبات الجملة المباشرة. يمكنكم تصفح أحدث عروض وأسعار المواد الغذائية والكانز والمشروبات وإرسال طلباتكم الفورية ومتابعة مديونياتكم بكل سهولة وشفافية.',
+        'general',
+        'high',
+        'all',
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        'published',
+        now,
+        null,
+        'إدارة شركة الحليم',
+        now,
+        now,
+      ]);
+
+      stmt.run([
+        'info-delivery-2',
+        'مواعيد التوصيل وخطوط السير في محافظة الإسكندرية 🚚',
+        'نحيط عملاءنا الكرام علماً بأن التوصيل يتم بصورة يومية لكافة مناطق الإسكندرية. نرجو تسجيل طلبياتكم قبل الساعة 2 ظهراً لضمان التحميل مع دوريات اليوم نفسه. للتواصل المباشر مع المندوب محمد فوزي: 01000000000.',
+        'policy',
+        'normal',
+        'all',
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        'published',
+        now,
+        null,
+        'إدارة التوزيع',
+        now,
+        now,
+      ]);
+
+      stmt.free();
+      saveDb();
+    }
+  } catch (err) {
+    console.error('Error seeding initial information:', err);
   }
 }
 
@@ -763,6 +867,50 @@ export function seedCategoriesAndProducts(database: Database): void {
 async function seedInitialData(database: Database): Promise<void> {
   // 1. Seed Master Admin (Hashed & Secured with Argon2id)
   await syncAdminUserAccount(database);
+
+  // Seed standard/sample customer accounts if they don't exist
+  try {
+    const demoPassword = process.env.DEMO_CUSTOMER_PASSWORD || 'Customer2026!#';
+    const hashedDemoPassword = await hashPassword(demoPassword);
+    const demoCustomers = [
+      {
+        id: 'usr-cust-nour-1',
+        username: '01011112222',
+        password: hashedDemoPassword,
+        fullName: 'أحمد محمود (سوبر ماركت النور)',
+        phone: '01011112222',
+        role: 'customer',
+        storeName: 'سوبر ماركت النور',
+        address: 'العجمي - الهانوفيل - شارع مسجد القويري',
+      },
+      {
+        id: 'usr-cust-ekhlas-2',
+        username: '01234567890',
+        password: hashedDemoPassword,
+        fullName: 'محمد علي (سوبر ماركت الإخلاص)',
+        phone: '01234567890',
+        role: 'customer',
+        storeName: 'سوبر ماركت الإخلاص',
+        address: 'سيدي بشر - شارع خالد بن الوليد',
+      },
+    ];
+
+    for (const cust of demoCustomers) {
+      const checkStmt = database.prepare('SELECT id FROM users WHERE phone = ? OR username = ?');
+      checkStmt.bind([cust.phone, cust.username]);
+      const exists = checkStmt.step();
+      checkStmt.free();
+
+      if (!exists) {
+        database.run(
+          `INSERT INTO users (id, username, password, fullName, phone, role, storeName, address) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          [cust.id, cust.username, cust.password, cust.fullName, cust.phone, cust.role, cust.storeName, cust.address]
+        );
+      }
+    }
+  } catch (err) {
+    console.error('Error seeding demo customers:', err);
+  }
 
   // 2. Seed Official Categories and Products
   seedCategoriesAndProducts(database);

@@ -12,6 +12,7 @@ import {
   RotateCcw,
   LogOut,
   ChevronDown,
+  Bell,
 } from 'lucide-react';
 
 interface HeaderProps {
@@ -21,8 +22,10 @@ interface HeaderProps {
   setActiveTab: (tab: string) => void;
   cartCount: number;
   unpaidDebt?: number;
+  unreadInfoCount?: number;
   onOpenCart: () => void;
   onOpenLogin: () => void;
+  onOpenInformation?: () => void;
   onLogout?: () => void;
 }
 
@@ -33,8 +36,10 @@ export const Header: React.FC<HeaderProps> = ({
   setActiveTab,
   cartCount,
   unpaidDebt = 0,
+  unreadInfoCount = 0,
   onOpenCart,
   onOpenLogin,
+  onOpenInformation,
   onLogout,
 }) => {
   const isAdmin = user?.role === 'admin';
@@ -154,6 +159,24 @@ export const Header: React.FC<HeaderProps> = ({
                     <button
                       onClick={() => {
                         setIsDropdownOpen(false);
+                        onOpenInformation?.();
+                      }}
+                      className="w-full text-right px-3.5 py-2 text-xs text-slate-200 hover:bg-emerald-800/40 hover:text-white flex items-center justify-between font-bold transition-colors"
+                    >
+                      <div className="flex items-center gap-2">
+                        <Bell className="w-3.5 h-3.5 text-amber-400" />
+                        <span>🔔 المعلومات والتنبيهات</span>
+                      </div>
+                      {unreadInfoCount > 0 && (
+                        <span className="bg-amber-400 text-slate-950 font-black text-[9px] px-1.5 py-0.5 rounded-full font-mono">
+                          {unreadInfoCount}
+                        </span>
+                      )}
+                    </button>
+
+                    <button
+                      onClick={() => {
+                        setIsDropdownOpen(false);
                         setActiveTab('account');
                       }}
                       className="w-full text-right px-3.5 py-2 text-xs text-slate-200 hover:bg-emerald-800/40 hover:text-white flex items-center gap-2 font-bold transition-colors"
@@ -223,6 +246,20 @@ export const Header: React.FC<HeaderProps> = ({
               <span>دخول</span>
             </button>
           )}
+
+          {/* Notification Bell Icon in Header */}
+          <button
+            onClick={onOpenInformation}
+            className="relative bg-emerald-800 hover:bg-emerald-700 border border-emerald-700 px-2.5 py-1.5 rounded-xl font-black text-xs flex items-center gap-1 transition-all active:scale-95 shadow-xs text-amber-300"
+            title="المعلومات والتنبيهات"
+          >
+            <Bell className="w-4 h-4" />
+            {unreadInfoCount > 0 && (
+              <span className="bg-amber-400 text-slate-950 font-mono text-[10px] font-black min-w-[18px] h-[18px] px-1 rounded-full flex items-center justify-center -mr-0.5 animate-pulse">
+                {unreadInfoCount}
+              </span>
+            )}
+          </button>
 
           {/* Cart Icon in Header */}
           <button

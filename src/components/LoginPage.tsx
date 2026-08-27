@@ -316,16 +316,6 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess, onNavigate
                 <Lock className="w-3.5 h-3.5 text-emerald-400" />
                 <span>كلمة المرور</span>
               </label>
-
-              {/* Prominent Quick Forgot-Password Link */}
-              <button
-                type="button"
-                onClick={() => onNavigate('/forgot-password')}
-                className="inline-flex items-center gap-1 text-xs font-black text-emerald-400 hover:text-emerald-300 hover:underline underline-offset-4 transition-all py-0.5 px-1.5 rounded-lg bg-emerald-950/60 border border-emerald-800/80 hover:bg-emerald-900/60"
-              >
-                <KeyRound className="w-3 h-3 text-amber-400" />
-                <span>نسيت كلمة المرور؟</span>
-              </button>
             </div>
 
             <div className="relative">
@@ -356,7 +346,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess, onNavigate
             </div>
           </div>
 
-          {/* Remember Me Checkbox & Quick Recovery Shortcut */}
+          {/* Remember Me Checkbox */}
           <div className="flex items-center justify-between pt-1">
             <label className="flex items-center gap-2 cursor-pointer select-none">
               <input
@@ -367,14 +357,6 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess, onNavigate
               />
               <span className="text-xs text-slate-200 font-bold">تذكر تسجيل الدخول (30 يوم)</span>
             </label>
-
-            <button
-              type="button"
-              onClick={() => onNavigate('/forgot-password')}
-              className="text-[11px] text-slate-400 hover:text-amber-300 font-bold transition-colors md:hidden"
-            >
-              استعادة الحساب 🔑
-            </button>
           </div>
 
           {/* Submit Button */}
@@ -400,27 +382,6 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess, onNavigate
             )}
           </button>
         </form>
-
-        {/* Quick Password Recovery Banner / Card */}
-        <div className="mt-5 p-3 rounded-2xl bg-slate-950/80 border border-slate-800 flex items-center justify-between gap-2">
-          <div className="flex items-center gap-2 text-right">
-            <div className="w-7 h-7 rounded-xl bg-amber-400/10 border border-amber-400/30 flex items-center justify-center text-amber-400 shrink-0">
-              <KeyRound className="w-3.5 h-3.5" />
-            </div>
-            <div>
-              <p className="text-[11px] font-bold text-slate-200 leading-tight">واجهتك مشكلة في كلمة المرور؟</p>
-              <p className="text-[10px] text-slate-400 mt-0.5">استرجع حسابك فوراً عبر رقم هاتفك</p>
-            </div>
-          </div>
-          <button
-            type="button"
-            onClick={() => onNavigate('/forgot-password')}
-            className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-amber-400 hover:text-amber-300 text-[11px] font-black border border-slate-700 transition-all shrink-0 flex items-center gap-1"
-          >
-            <span>استعادة</span>
-            <ArrowLeft className="w-3 h-3" />
-          </button>
-        </div>
 
         {/* Navigation Link to Register */}
         <div className="mt-5 text-center">
