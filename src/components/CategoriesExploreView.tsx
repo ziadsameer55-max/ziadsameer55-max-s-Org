@@ -97,6 +97,14 @@ export const CategoriesExploreView: React.FC<CategoriesExploreViewProps> = ({
           );
         })}
       </div>
+
+      {/* Developer & Technical Support Branding */}
+      <div className="text-center pt-8 pb-4 space-y-1 select-none">
+        <p className="text-xs text-slate-500 font-medium">شركة الحليم للتجارة والتوزيع • جميع الحقوق محفوظة</p>
+        <p className="text-[11px] text-slate-400 font-normal">
+          Designed & Developed by Astra Systems | Technical Support: 01278910793
+        </p>
+      </div>
     </div>
   );
 };

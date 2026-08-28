@@ -112,8 +112,8 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess, onNavigate
       return;
     }
 
-    if (password.length < 4) {
-      setError('كلمة المرور يجب أن لا تقل عن 4 خانات');
+    if (password.length < 6) {
+      setError('كلمة المرور يجب ألا تقل عن 6 خانات.');
       return;
     }
 
@@ -334,6 +334,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess, onNavigate
                 className="w-full bg-slate-950 text-white rounded-2xl pr-10 pl-12 py-3.5 text-sm font-semibold transition-all text-right placeholder:text-slate-400 placeholder:text-right shadow-inner border-2 border-slate-600 hover:border-slate-500 focus:outline-none focus:border-emerald-400 focus:ring-4 focus:ring-emerald-500/20 focus:bg-slate-900"
                 autoComplete="current-password"
                 required
+                minLength={6}
               />
               <button
                 type="button"
@@ -400,8 +401,13 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess, onNavigate
       </div>
 
       {/* Footer Info */}
-      <div className="mt-6 text-center text-xs text-slate-400 font-medium select-none">
-        شركة الحليم للتجارة والتوزيع • نظام الحسابات والتوريدات المؤمن B2B
+      <div className="mt-6 text-center space-y-1 select-none">
+        <p className="text-xs text-slate-400 font-medium">
+          شركة الحليم للتجارة والتوزيع • نظام الحسابات والتوريدات المؤمن B2B
+        </p>
+        <p className="text-[11px] text-slate-400 font-normal">
+          Designed & Developed by Astra Systems | Technical Support: 01278910793
+        </p>
       </div>
     </div>
   );

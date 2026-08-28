@@ -54,44 +54,14 @@ export async function verifyPassword(password: string, storedHash: string): Prom
   return password === storedHash;
 }
 
-// Strict Strong Password Validation Policy
-// Minimum 12 characters, requiring uppercase, lowercase, numbers, and special symbols
+// Password Validation Policy
+// Minimum 6 characters (Letters only, numbers only, letters+numbers, uppercase/lowercase allowed)
 export function validateStrongPassword(password: string): { valid: boolean; message?: string } {
   if (!password || typeof password !== 'string') {
-    return { valid: false, message: 'يرجى إدخال كلمة مرور صحيحة' };
+    return { valid: false, message: 'يرجى إدخال كلمة المرور' };
   }
-  if (password.length < 12) {
-    return { valid: false, message: 'كلمة المرور يجب ألا تقل عن 12 رمزاً/خانة لضمان أقصى حماية' };
-  }
-
-  const hasLower = /[a-z]/.test(password);
-  const hasUpper = /[A-Z]/.test(password);
-  const hasNumber = /[0-9]/.test(password);
-  const hasSpecial = /[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?~` ]/.test(password);
-
-  if (!hasLower) {
-    return { valid: false, message: 'كلمة المرور يجب أن تتضمن حرفاً صغيراً واحداً على الأقل (a-z)' };
-  }
-
-  if (!hasUpper) {
-    return { valid: false, message: 'كلمة المرور يجب أن تتضمن حرفاً كبيراً واحداً على الأقل (A-Z)' };
-  }
-
-  if (!hasNumber) {
-    return { valid: false, message: 'كلمة المرور يجب أن تتضمن رقماً واحداً على الأقل (0-9)' };
-  }
-
-  if (!hasSpecial) {
-    return { valid: false, message: 'كلمة المرور يجب أن تتضمن رمزاً خاصاً واحداً على الأقل (!@#$%^&*...)' };
-  }
-
-  const commonWeak = [
-    '123456789012', 'password12345', 'admin12345678', 'qwerty123456',
-    'halim12345678', '112233445566', '000000000000', '123412341234',
-    'admin@1234567', 'user12345678', 'welcome123456', 'Pass@word1234'
-  ];
-  if (commonWeak.includes(password.toLowerCase())) {
-    return { valid: false, message: 'كلمة المرور ضعيفة وشائعة، يرجى اختيار كلمة مرور أكثر تعقيداً' };
+  if (password.length < 6) {
+    return { valid: false, message: 'كلمة المرور يجب ألا تقل عن 6 خانات.' };
   }
 
   return { valid: true };
@@ -101,11 +71,11 @@ export function validateStrongPassword(password: string): { valid: boolean; mess
 const INITIAL_ADMIN_CONFIG = {
   id: 'usr-admin-master',
   username: 'mohamed.fawzy',
-  passwordPlain: process.env.ADMIN_INITIAL_PASSWORD || 'Hamo2026##@2026',
-  fullName: 'محمد فوزي / الإدارة العامة',
-  phone: '01000000000',
+  passwordPlain: process.env.ADMIN_INITIAL_PASSWORD || 'Hamo2000#$',
+  fullName: 'Mohamed Fawzy',
+  phone: '+201280304043',
   role: 'admin',
-  storeName: 'شركة الحليم للتجارة والتوزيع - الإدارة العامة',
+  storeName: 'شركة الحليم للتجارة والتوزيع - الإدارة العامة (Owner / Master Admin)',
   address: 'محافظة الإسكندرية - بجوار مسجد القويري - بوابة 8',
 };
 
@@ -124,11 +94,11 @@ export async function getDb(): Promise<Database> {
       db = new SQL.Database(fileBuffer);
       await initSchema(db);
 
-      // Ensure categories and products are populated with official Halim catalog
-      const res = db.exec('SELECT COUNT(*) as count FROM products');
-      const count = (res[0]?.values[0]?.[0] as number) || 0;
-      if (count < 20) {
-        seedCategoriesAndProducts(db);
+      // Ensure categories are populated if empty
+      const catRes = db.exec('SELECT COUNT(*) as count FROM categories');
+      const catCount = (catRes[0]?.values[0]?.[0] as number) || 0;
+      if (catCount === 0) {
+        seedCategories(db);
       }
       await syncAdminUserAccount(db);
       saveDb();
@@ -829,14 +799,19 @@ export async function syncAdminUserAccount(database: Database): Promise<void> {
   }
 }
 
-export function seedCategoriesAndProducts(database: Database): void {
-  // 1. Seed Categories
+export function seedCategories(database: Database): void {
+  // 1. Seed Categories if empty
   database.run(`DELETE FROM categories;`);
   const catStmt = database.prepare(`INSERT INTO categories (id, name, icon) VALUES (?, ?, ?)`);
   for (const cat of INITIAL_CATEGORIES) {
     catStmt.run([cat.id, cat.name, cat.icon]);
   }
   catStmt.free();
+}
+
+export function seedCategoriesAndProducts(database: Database): void {
+  // 1. Seed Categories
+  seedCategories(database);
 
   // 2. Seed Products
   database.run(`DELETE FROM products;`);
@@ -912,8 +887,8 @@ async function seedInitialData(database: Database): Promise<void> {
     console.error('Error seeding demo customers:', err);
   }
 
-  // 2. Seed Official Categories and Products
-  seedCategoriesAndProducts(database);
+  // 2. Seed Official Categories
+  seedCategories(database);
 
   // 3. Seed Official System Settings
   const settings: SystemSettings = {

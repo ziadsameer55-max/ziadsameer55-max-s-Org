@@ -219,6 +219,14 @@ export const SimpleMoreView: React.FC<SimpleMoreViewProps> = ({
         </span>
       </div>
 
+      {/* Developer & Technical Support Branding */}
+      <div className="text-center pt-3 pb-2 space-y-1 select-none">
+        <p className="text-xs text-slate-500 font-medium">شركة الحليم للتجارة والتوزيع</p>
+        <p className="text-[11px] text-slate-400 font-normal">
+          Designed & Developed by Astra Systems | Technical Support: 01278910793
+        </p>
+      </div>
+
       {/* Statement Modal for Customer */}
       {showStatementModal && statement && statement.summary && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs z-50 flex items-center justify-center p-3 sm:p-4 overflow-y-auto">

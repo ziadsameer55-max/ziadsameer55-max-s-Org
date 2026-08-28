@@ -512,7 +512,10 @@ export const PrintStatementModal: React.FC<PrintStatementModalProps> = ({
 
             {/* Footer Note */}
             <div className="text-center text-[10px] text-slate-600 mt-4 pt-2 border-t border-dashed border-slate-300">
-              {settings?.receiptFooter || 'شكراً لتعاملكم مع شركة الحليم للتجارة والتوزيع'}
+              <p>{settings?.receiptFooter || 'شكراً لتعاملكم مع شركة الحليم للتجارة والتوزيع'}</p>
+              <p className="text-[8px] text-slate-400 font-mono mt-1 pt-1 border-t border-slate-200">
+                Powered by Astra Systems • 01278910793
+              </p>
             </div>
           </div>
         </div>

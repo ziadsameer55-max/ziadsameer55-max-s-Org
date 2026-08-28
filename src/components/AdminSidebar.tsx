@@ -137,23 +137,23 @@ export const AdminSidebar: React.FC<AdminSidebarProps> = ({
           )}
         </div>
 
-        {/* Admin / Rep User Badge */}
+        {/* Master Admin / Owner User Badge */}
         <div className="bg-slate-800/90 rounded-xl p-2.5 flex items-center justify-between text-xs border border-slate-700/60">
           <div className="flex items-center gap-2">
-            <div className="w-7 h-7 rounded-lg bg-emerald-500/20 text-emerald-400 flex items-center justify-center">
+            <div className="w-7 h-7 rounded-lg bg-amber-500/20 text-amber-400 flex items-center justify-center">
               <ShieldCheck className="w-4 h-4" />
             </div>
             <div>
               <span className="font-bold text-slate-200 block text-xs">
-                {user?.fullName || 'محمد فوزي'}
+                {user?.fullName || 'Mohamed Fawzy'}
               </span>
               <span className="text-[10px] text-amber-400/90 font-medium">
-                مدير النظام والمبيعات
+                Master Admin / Owner (صاحب النظام)
               </span>
             </div>
           </div>
-          <span className="text-[10px] bg-emerald-900/60 text-emerald-300 border border-emerald-700/50 px-1.5 py-0.5 rounded font-mono font-bold">
-            أدمن
+          <span className="text-[9px] bg-amber-900/60 text-amber-300 border border-amber-600/50 px-1.5 py-0.5 rounded font-mono font-black">
+            Owner
           </span>
         </div>
       </div>
@@ -252,6 +252,12 @@ export const AdminSidebar: React.FC<AdminSidebarProps> = ({
           <LogOut className="w-4 h-4" />
           <span>تسجيل الخروج</span>
         </button>
+
+        {/* Developer & Technical Support Branding */}
+        <div className="pt-2 text-center text-[10px] text-slate-400 border-t border-slate-800/60 select-none">
+          <p className="font-semibold text-slate-300">Designed & Developed by Astra Systems</p>
+          <p className="text-[9px] text-slate-400 font-mono mt-0.5">Technical Support: 01278910793</p>
+        </div>
       </div>
     </div>
   );

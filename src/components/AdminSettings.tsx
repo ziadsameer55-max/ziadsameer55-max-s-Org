@@ -251,7 +251,10 @@ export const AdminSettings: React.FC<AdminSettingsProps> = ({
       <div class="divider-double"></div>
 
       <div class="print-footer-text" style="text-align: center; color: #475569; margin-top: 6px;">
-        ${settings.receiptFooter || 'شكراً لتعاملكم مع شركة الحليم للتجارة والتوزيع'}
+        <div>${settings.receiptFooter || 'شكراً لتعاملكم مع شركة الحليم للتجارة والتوزيع'}</div>
+        <div style="font-size: 8px; color: #94a3b8; font-family: monospace; margin-top: 4px; border-top: 1px dashed #cbd5e1; padding-top: 2px;">
+          Powered by Astra Systems • 01278910793
+        </div>
       </div>
     `;
 
@@ -790,7 +793,10 @@ export const AdminSettings: React.FC<AdminSettingsProps> = ({
                   style={{ fontSize: `${activeFontSizes.footer}px` }}
                   className="text-center text-slate-500 mt-3 pt-2 border-t border-double border-slate-900 font-medium"
                 >
-                  {settings.receiptFooter || 'شكراً لتعاملكم مع شركة الحليم للتجارة والتوزيع'}
+                  <p>{settings.receiptFooter || 'شكراً لتعاملكم مع شركة الحليم للتجارة والتوزيع'}</p>
+                  <p className="text-[8px] text-slate-400 font-mono mt-1 pt-1 border-t border-slate-200">
+                    Powered by Astra Systems • 01278910793
+                  </p>
                 </div>
               </div>
             </div>

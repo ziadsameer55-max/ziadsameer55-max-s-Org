@@ -77,11 +77,15 @@ async function startServer() {
 
   // Strict Direct Database & Config File Protection
   app.use((req: Request, res: Response, next) => {
-    const lowerUrl = req.url.toLowerCase();
+    const lowerUrl = req.url.toLowerCase().split('?')[0];
     if (
       lowerUrl.includes('.sqlite') ||
       lowerUrl.includes('.db') ||
       lowerUrl.includes('.env') ||
+      lowerUrl.includes('.git') ||
+      lowerUrl.endsWith('server.ts') ||
+      lowerUrl.endsWith('package.json') ||
+      lowerUrl.endsWith('tsconfig.json') ||
       lowerUrl.startsWith('/data/') ||
       lowerUrl.includes('..')
     ) {
@@ -409,7 +413,17 @@ async function startServer() {
         });
       }
 
+      if (typeof password !== 'string' || password.length < 6) {
+        return res.status(400).json({
+          success: false,
+          message: 'كلمة المرور يجب ألا تقل عن 6 خانات.',
+        });
+      }
+
       const cleanUsername = String(username).trim();
+      const rawDigits = cleanUsername.replace(/\D/g, '');
+      const localPhone = rawDigits.startsWith('20') ? '0' + rawDigits.slice(2) : (rawDigits.startsWith('0') ? rawDigits : '0' + rawDigits);
+      const intlPhone = rawDigits.startsWith('20') ? '+' + rawDigits : (rawDigits.startsWith('0') ? '+2' + rawDigits : '+20' + rawDigits);
 
       // Check brute-force login lockout
       const lockout = checkLoginLockout(db, cleanUsername, ip);
@@ -422,9 +436,9 @@ async function startServer() {
       }
 
       const stmt = db.prepare(
-        'SELECT * FROM users WHERE LOWER(username) = LOWER(?) OR username = ? OR phone = ?'
+        `SELECT * FROM users WHERE LOWER(username) = LOWER(?) OR username = ? OR phone = ? OR phone = ? OR phone = ? OR REPLACE(REPLACE(REPLACE(phone, ' ', ''), '-', ''), '+', '') = ?`
       );
-      stmt.bind([cleanUsername, cleanUsername, cleanUsername]);
+      stmt.bind([cleanUsername, cleanUsername, cleanUsername, localPhone, intlPhone, rawDigits]);
 
       if (stmt.step()) {
         const row = stmt.getAsObject();
@@ -591,7 +605,7 @@ async function startServer() {
 
       const pwValidation = validateStrongPassword(password);
       if (!pwValidation.valid) {
-        return res.status(400).json({ success: false, error: pwValidation.message || 'كلمة المرور لا تلبي معايير الأمان' });
+        return res.status(400).json({ success: false, error: pwValidation.message || 'كلمة المرور يجب ألا تقل عن 6 خانات.' });
       }
 
       if (confirmPassword !== undefined && password !== confirmPassword) {
@@ -716,7 +730,7 @@ async function startServer() {
 
       const pwValidation = validateStrongPassword(newPassword);
       if (!pwValidation.valid) {
-        return res.status(400).json({ success: false, error: pwValidation.message || 'كلمة المرور الجديدة لا تلبي معايير الأمان' });
+        return res.status(400).json({ success: false, error: pwValidation.message || 'كلمة المرور يجب ألا تقل عن 6 خانات.' });
       }
 
       if (confirmPassword !== undefined && newPassword !== confirmPassword) {
@@ -763,7 +777,7 @@ async function startServer() {
 
       const pwValidation = validateStrongPassword(newPassword);
       if (!pwValidation.valid) {
-        return res.status(400).json({ success: false, error: pwValidation.message || 'كلمة المرور الجديدة لا تلبي معايير الأمان' });
+        return res.status(400).json({ success: false, error: pwValidation.message || 'كلمة المرور يجب ألا تقل عن 6 خانات.' });
       }
 
       if (confirmPassword !== undefined && newPassword !== confirmPassword) {

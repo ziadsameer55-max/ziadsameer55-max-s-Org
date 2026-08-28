@@ -438,6 +438,9 @@ export const PrintReceiptModal: React.FC<PrintReceiptModalProps> = ({
                 <span>توقيع المستلم: ....................</span>
                 <span>توقيع المندوب: ....................</span>
               </div>
+              <div className="pt-2 mt-2 border-t border-slate-300 text-[8px] text-slate-500 font-mono tracking-tight print-powered-by">
+                Powered by Astra Systems • 01278910793
+              </div>
             </div>
           </div>
         </div>

@@ -128,13 +128,13 @@ export const CustomerAccount: React.FC<CustomerAccountProps> = ({
     e.preventDefault();
     setPasswordMsg(null);
 
-    if (newPassword !== confirmPassword) {
-      setPasswordMsg({ type: 'error', text: 'كلمة المرور وتأكيدها غير متطابقين' });
+    if (newPassword.length < 6) {
+      setPasswordMsg({ type: 'error', text: 'كلمة المرور يجب ألا تقل عن 6 خانات.' });
       return;
     }
 
-    if (newPassword.length < 12) {
-      setPasswordMsg({ type: 'error', text: 'كلمة المرور الجديدة يجب ألا تقل عن 12 خانة وتتضمن أحرفاً وأرقاماً ورموزاً' });
+    if (newPassword !== confirmPassword) {
+      setPasswordMsg({ type: 'error', text: 'كلمة المرور وتأكيدها غير متطابقين' });
       return;
     }
 
@@ -951,10 +951,10 @@ export const CustomerAccount: React.FC<CustomerAccountProps> = ({
                   <input
                     type="password"
                     required
-                    minLength={12}
+                    minLength={6}
                     value={newPassword}
                     onChange={(e) => setNewPassword(e.target.value)}
-                    placeholder="12 خانة على الأقل (حروف وأرقام ورموز)..."
+                    placeholder="6 خانات على الأقل (أرقام أو حروف)..."
                     className="w-full bg-slate-50 border border-slate-200 focus:border-emerald-700 focus:bg-white rounded-2xl px-3.5 py-2 text-xs font-mono font-bold text-slate-800 focus:outline-none"
                   />
                 </div>
@@ -964,6 +964,7 @@ export const CustomerAccount: React.FC<CustomerAccountProps> = ({
                   <input
                     type="password"
                     required
+                    minLength={6}
                     value={confirmPassword}
                     onChange={(e) => setConfirmPassword(e.target.value)}
                     placeholder="أعد إدخال كلمة المرور..."
@@ -1053,6 +1054,14 @@ export const CustomerAccount: React.FC<CustomerAccountProps> = ({
             <span>واتساب المندوب</span>
           </a>
         </div>
+      </div>
+
+      {/* Developer & Technical Support Branding */}
+      <div className="text-center pt-2 pb-4 space-y-1 select-none">
+        <p className="text-xs text-slate-500 font-medium">شركة الحليم للتجارة والتوزيع</p>
+        <p className="text-[11px] text-slate-400 font-normal">
+          Designed & Developed by Astra Systems | Technical Support: 01278910793
+        </p>
       </div>
     </div>
   );

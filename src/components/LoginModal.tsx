@@ -72,6 +72,11 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onLogin
       return;
     }
 
+    if (password.length < 6) {
+      setError('كلمة المرور يجب ألا تقل عن 6 خانات.');
+      return;
+    }
+
     // Client-side phone / email / username validation
     const isEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanUser);
     const cleanPhone = cleanUser.replace(/[\s\-()]/g, '');
@@ -121,13 +126,13 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onLogin
     e.preventDefault();
     resetMessages();
 
-    if (regPassword !== regConfirmPassword) {
-      setError('كلمة المرور وتأكيد كلمة المرور غير متطابقين');
+    if (regPassword.length < 6) {
+      setError('كلمة المرور يجب ألا تقل عن 6 خانات.');
       return;
     }
 
-    if (regPassword.length < 12) {
-      setError('كلمة المرور يجب ألا تقل عن 12 خانة وتتضمن أحرفاً وأرقاماً ورموزاً');
+    if (regPassword !== regConfirmPassword) {
+      setError('كلمة المرور وتأكيد كلمة المرور غير متطابقين');
       return;
     }
 
@@ -311,6 +316,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onLogin
                   <input
                     type={showPassword ? 'text' : 'password'}
                     required
+                    minLength={6}
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                     placeholder="أدخل كلمة المرور..."
@@ -439,10 +445,10 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onLogin
                   <input
                     type={showRegPassword ? 'text' : 'password'}
                     required
-                    minLength={12}
+                    minLength={6}
                     value={regPassword}
                     onChange={(e) => setRegPassword(e.target.value)}
-                    placeholder="12 خانة على الأقل (حروف وأرقام ورموز)"
+                    placeholder="6 خانات على الأقل (أرقام أو حروف)"
                     className="w-full bg-slate-50 border border-slate-200 focus:border-emerald-700 focus:bg-white rounded-2xl px-3 py-2 text-xs text-slate-900 focus:outline-none transition-all font-bold font-mono"
                   />
                 </div>
@@ -456,7 +462,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onLogin
                   <input
                     type={showRegPassword ? 'text' : 'password'}
                     required
-                    minLength={12}
+                    minLength={6}
                     value={regConfirmPassword}
                     onChange={(e) => setRegConfirmPassword(e.target.value)}
                     placeholder="أعد إدخال الكلمة"

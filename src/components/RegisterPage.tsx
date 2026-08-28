@@ -60,8 +60,8 @@ export const RegisterPage: React.FC<RegisterPageProps> = ({ onRegisterSuccess, o
       return;
     }
 
-    if (password.length < 12) {
-      setError('كلمة المرور يجب ألا تقل عن 12 خانة/رمز وتتضمن أحرفاً كبيرة وصغيرة وأرقاماً ورموزاً خاصة');
+    if (password.length < 6) {
+      setError('كلمة المرور يجب ألا تقل عن 6 خانات.');
       return;
     }
 
@@ -236,11 +236,11 @@ export const RegisterPage: React.FC<RegisterPageProps> = ({ onRegisterSuccess, o
                 type={showPassword ? 'text' : 'password'}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                placeholder="12 خانة على الأقل (حروف كبيرة وصغيرة وأرقام ورموز)"
+                placeholder="6 خانات على الأقل (أرقام أو حروف)"
                 dir="ltr"
                 className="w-full bg-slate-950 border border-slate-750 text-white rounded-2xl pr-10 pl-11 py-2.5 text-sm focus:outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20 font-mono transition-all text-right placeholder:text-slate-600 placeholder:text-right"
                 required
-                minLength={12}
+                minLength={6}
               />
               <button
                 type="button"
@@ -251,7 +251,7 @@ export const RegisterPage: React.FC<RegisterPageProps> = ({ onRegisterSuccess, o
                 {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
               </button>
             </div>
-            <p className="text-[11px] text-slate-500 mt-1">يجب أن تشمل حروفاً إنجليزية كبيرة وصغيرة، أرقاماً، ورموزاً خاصة مثل (!@#$%).</p>
+            <p className="text-[11px] text-slate-400 mt-1">الحد الأدنى 6 خانات (أرقام فقط، حروف فقط، أو كلاهما مسموح).</p>
           </div>
 
           {/* Confirm Password */}
@@ -271,7 +271,7 @@ export const RegisterPage: React.FC<RegisterPageProps> = ({ onRegisterSuccess, o
                 dir="ltr"
                 className="w-full bg-slate-950 border border-slate-750 text-white rounded-2xl pr-10 pl-11 py-2.5 text-sm focus:outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20 font-mono transition-all text-right placeholder:text-slate-600 placeholder:text-right"
                 required
-                minLength={12}
+                minLength={6}
               />
               <button
                 type="button"
@@ -334,8 +334,13 @@ export const RegisterPage: React.FC<RegisterPageProps> = ({ onRegisterSuccess, o
       </div>
 
       {/* Footer Info */}
-      <div className="mt-6 text-center text-xs text-slate-500 select-none">
-        شركة الحليم للتجارة والتوزيع • الإسكندرية
+      <div className="mt-6 text-center space-y-1 select-none">
+        <p className="text-xs text-slate-500">
+          شركة الحليم للتجارة والتوزيع • الإسكندرية
+        </p>
+        <p className="text-[11px] text-slate-400 font-normal">
+          Designed & Developed by Astra Systems | Technical Support: 01278910793
+        </p>
       </div>
     </div>
   );
