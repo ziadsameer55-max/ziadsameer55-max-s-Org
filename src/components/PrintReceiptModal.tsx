@@ -133,13 +133,24 @@ export const PrintReceiptModal: React.FC<PrintReceiptModalProps> = ({
             top: 0 !important;
             width: 100% !important;
             margin: 0 !important;
-            padding: 8px !important;
+            padding: 4px 6px 14px 6px !important;
             color: #000000 !important;
             background: #ffffff !important;
             font-family: 'Cairo', 'Courier New', monospace !important;
           }
           .no-print {
             display: none !important;
+          }
+          .print-powered-by {
+            direction: ltr !important;
+            text-align: center !important;
+            font-family: 'JetBrains Mono', 'Courier New', monospace !important;
+            font-weight: 700 !important;
+            font-size: 8.5px !important;
+            margin-top: 6px !important;
+            padding-top: 4px !important;
+            padding-bottom: 8px !important;
+            border-top: 1px dashed #64748b !important;
           }
         }
       `}</style>
@@ -428,17 +439,20 @@ export const PrintReceiptModal: React.FC<PrintReceiptModalProps> = ({
             {/* Footer */}
             <div
               style={{ fontSize: `${activeFontSizes.footer}px` }}
-              className="mt-3 pt-2 border-t border-black border-dashed text-center text-slate-700 space-y-0.5 print-footer-text"
+              className="mt-3 pt-2 border-t border-black border-dashed text-center text-slate-800 space-y-1 print-footer-text"
             >
               <p className="font-bold">
                 {settings?.receiptFooter || 'شكراً لتعاملكم مع شركة الحليم للتجارة والتوزيع'}
               </p>
-              <p>البضاعة المستلمة بحالة جيدة ولا ترد إلا في حالة عيوب الصناعة</p>
-              <div className="flex justify-between pt-3 text-[9px] font-bold text-slate-600">
+              <p className="text-[10px] text-slate-700">البضاعة المستلمة بحالة جيدة ولا ترد إلا في حالة عيوب الصناعة</p>
+              <div className="flex justify-between pt-2.5 pb-1 text-[9px] font-bold text-slate-700">
                 <span>توقيع المستلم: ....................</span>
                 <span>توقيع المندوب: ....................</span>
               </div>
-              <div className="pt-2 mt-2 border-t border-slate-300 text-[8px] text-slate-500 font-mono tracking-tight print-powered-by">
+              <div 
+                className="pt-2 mt-2 border-t border-dashed border-slate-400 text-[9px] text-slate-700 font-mono font-bold tracking-tight text-center print-powered-by"
+                style={{ direction: 'ltr' }}
+              >
                 Powered by Astra Systems • 01278910793
               </div>
             </div>

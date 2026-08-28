@@ -15,8 +15,12 @@ import {
   Square,
   AlertTriangle,
   X,
+  FileSpreadsheet,
+  Download,
+  Loader2,
 } from 'lucide-react';
 import { apiFetch } from '../utils/api';
+import { downloadAdminBackupFile } from '../utils/exportHelper';
 
 interface AdminProductsManagerProps {
   products: Product[];
@@ -41,11 +45,25 @@ export const AdminProductsManager: React.FC<AdminProductsManagerProps> = ({
   const [loading, setLoading] = useState(false);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [statusActionLoading, setStatusActionLoading] = useState<string | null>(null);
+  const [exportingCsv, setExportingCsv] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
   const showToast = (msg: string) => {
     setToastMessage(msg);
     setTimeout(() => setToastMessage(null), 3500);
+  };
+
+  const handleExportProductsCsv = async () => {
+    try {
+      await downloadAdminBackupFile(
+        '/api/admin/backup/products.csv',
+        `halim_products_sheet_${new Date().toISOString().slice(0, 10)}.csv`,
+        setExportingCsv
+      );
+      showToast('تم تنزيل شيت الإكسيل (CSV) للأصناف والأسعار بنجاح 📊');
+    } catch (err: any) {
+      showToast(err.message || 'تعذر تنزيل شيت الإكسيل');
+    }
   };
 
   const safeProducts = Array.isArray(products) ? products : [];
@@ -284,13 +302,29 @@ export const AdminProductsManager: React.FC<AdminProductsManagerProps> = ({
           </div>
         </div>
 
-        <button
-          onClick={openAddModal}
-          className="w-full md:w-auto px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-lg shadow-xs flex items-center justify-center gap-1.5 transition-colors"
-        >
-          <Plus className="w-4 h-4" />
-          <span>+ إضافة منتج جديد للكتالوج</span>
-        </button>
+        <div className="flex flex-wrap items-center gap-2 w-full md:w-auto">
+          <button
+            onClick={handleExportProductsCsv}
+            disabled={exportingCsv || products.length === 0}
+            className="flex-1 md:flex-initial px-3.5 py-2 bg-slate-800 hover:bg-slate-900 disabled:opacity-50 text-white font-bold text-xs rounded-lg shadow-xs flex items-center justify-center gap-1.5 transition-colors border border-slate-700"
+            title="تصدير جميع الأصناف والأسعار في شيت إكسيل CSV"
+          >
+            {exportingCsv ? (
+              <Loader2 className="w-4 h-4 animate-spin text-emerald-400" />
+            ) : (
+              <FileSpreadsheet className="w-4 h-4 text-emerald-400" />
+            )}
+            <span>{exportingCsv ? 'جاري التصدير...' : 'تصدير شيت إكسيل (Excel / CSV)'}</span>
+          </button>
+
+          <button
+            onClick={openAddModal}
+            className="flex-1 md:flex-initial px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-lg shadow-xs flex items-center justify-center gap-1.5 transition-colors"
+          >
+            <Plus className="w-4 h-4" />
+            <span>+ إضافة منتج جديد</span>
+          </button>
+        </div>
       </div>
 
       {/* Metrics Row / Status Filters */}

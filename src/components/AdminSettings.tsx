@@ -22,8 +22,17 @@ import {
   Type,
   Maximize2,
   RefreshCw,
+  Download,
+  Database,
+  FileSpreadsheet,
+  FileJson,
+  FolderArchive,
+  HardDrive,
+  Loader2,
+  CheckCircle,
 } from 'lucide-react';
 import { printHtmlContent } from '../utils/printHelper';
+import { downloadAdminBackupFile } from '../utils/exportHelper';
 
 interface AdminSettingsProps {
   settings: SystemSettings | null;
@@ -90,6 +99,42 @@ export const AdminSettings: React.FC<AdminSettingsProps> = ({
 
   const [savedSuccess, setSavedSuccess] = useState(false);
   const [quickSaveMsg, setQuickSaveMsg] = useState<string | null>(null);
+
+  // Backup & Export States
+  const [backupLoading, setBackupLoading] = useState<string | null>(null);
+  const [backupToast, setBackupToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+
+  const showBackupToast = (type: 'success' | 'error', message: string) => {
+    setBackupToast({ type, message });
+    setTimeout(() => setBackupToast(null), 4000);
+  };
+
+  const handleDownloadBackup = async (type: 'products' | 'full' | 'orders' | 'customers' | 'db') => {
+    const today = new Date().toISOString().slice(0, 10);
+    setBackupLoading(type);
+    try {
+      if (type === 'products') {
+        await downloadAdminBackupFile('/api/admin/backup/products.csv', `halim_products_sheet_${today}.csv`);
+        showBackupToast('success', 'تم تنزيل شيت الإكسيل (CSV) للأصناف والأسعار بنجاح 📊');
+      } else if (type === 'full') {
+        await downloadAdminBackupFile('/api/admin/backup/full', `halim_full_backup_${today}.json`);
+        showBackupToast('success', 'تم تنزيل النسخة الاحتياطية الشاملة للنظام (JSON) بنجاح 🛡️');
+      } else if (type === 'orders') {
+        await downloadAdminBackupFile('/api/admin/backup/orders.csv', `halim_orders_${today}.csv`);
+        showBackupToast('success', 'تم تنزيل كشف الفواتير والطلبات (Excel / CSV) بنجاح 📑');
+      } else if (type === 'customers') {
+        await downloadAdminBackupFile('/api/admin/backup/customers.csv', `halim_customers_debts_${today}.csv`);
+        showBackupToast('success', 'تم تنزيل كشف حسابات ومديونيات التجار (Excel / CSV) بنجاح 👥');
+      } else if (type === 'db') {
+        await downloadAdminBackupFile('/api/admin/backup/database-raw', `halim_database_${today}.sqlite`);
+        showBackupToast('success', 'تم تنزيل ملف قاعدة البيانات الأصلي (.sqlite) بنجاح 💾');
+      }
+    } catch (err: any) {
+      showBackupToast('error', err.message || 'حدث خطأ أثناء تنزيل النسخة الاحتياطية');
+    } finally {
+      setBackupLoading(null);
+    }
+  };
 
   const activeFontSizes: PrintFontSizes = settings.printFontSizes || DEFAULT_FONT_SIZES[settings.paperSize || '80mm'];
 
@@ -1019,6 +1064,217 @@ export const AdminSettings: React.FC<AdminSettingsProps> = ({
               />
             </div>
           </div>
+        </div>
+
+        {/* 6. Comprehensive Backup & Data Export Center */}
+        <div className="bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 border border-slate-700/80 rounded-2xl p-5 text-white space-y-4 shadow-md">
+          {/* Header */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3.5 border-b border-slate-700/70">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-amber-500/20 border border-amber-500/30 flex items-center justify-center text-amber-400 font-black shrink-0">
+                <Database className="w-5 h-5" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <h3 className="font-bold text-sm sm:text-base text-white">
+                    مركز النسخ الاحتياطي وتصدير وتأمين البيانات
+                  </h3>
+                  <span className="bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 text-[10px] font-black px-2 py-0.5 rounded-full">
+                    حفظ وتأمين خارجي 🛡️
+                  </span>
+                </div>
+                <p className="text-xs text-slate-300 mt-0.5 font-medium">
+                  تنزيل بيانات النظام وتصديرها بصيغة JSON وشيتات إكسيل (CSV) متوافقة 100% مع Microsoft Excel
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 text-xs text-amber-300 bg-amber-950/50 border border-amber-800/50 px-3 py-1.5 rounded-lg shrink-0">
+              <ShieldCheck className="w-4 h-4 shrink-0 text-amber-400" />
+              <span className="font-bold">تشفير وحماية كاملة للبيانات</span>
+            </div>
+          </div>
+
+          {/* Backup Action Cards Grid */}
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5 pt-1">
+            {/* Card 1: Products Sheet CSV */}
+            <div className="bg-slate-800/90 border border-slate-700/80 hover:border-emerald-500/50 rounded-xl p-4 flex flex-col justify-between gap-3 transition-all">
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2 text-emerald-400 font-bold text-xs sm:text-sm">
+                    <FileSpreadsheet className="w-4 h-4" />
+                    <span>شيت إكسيل الأصناف والأسعار</span>
+                  </div>
+                  <span className="text-[10px] bg-emerald-950 text-emerald-300 border border-emerald-800 px-2 py-0.5 rounded font-mono font-bold">
+                    CSV / Excel
+                  </span>
+                </div>
+                <p className="text-[11px] text-slate-300 leading-relaxed font-medium">
+                  تصدير كشف شامل بكافة الأصناف، الأقسام، أسعار الجملة، الوحدات، والأرصدة المتاحة في ملف إكسيل بترميز UTF-8 سليم يفتح مباشرة في برنامج Excel.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => handleDownloadBackup('products')}
+                disabled={backupLoading === 'products'}
+                className="w-full py-2.5 px-3 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-black text-xs rounded-lg transition-colors flex items-center justify-center gap-2 shadow-sm"
+              >
+                {backupLoading === 'products' ? (
+                  <Loader2 className="w-4 h-4 animate-spin text-white" />
+                ) : (
+                  <Download className="w-4 h-4" />
+                )}
+                <span>{backupLoading === 'products' ? 'جاري التجهيز والتنزيل...' : 'تنزيل شيت إكسيل للأصناف (CSV)'}</span>
+              </button>
+            </div>
+
+            {/* Card 2: Full System JSON Backup */}
+            <div className="bg-slate-800/90 border border-slate-700/80 hover:border-amber-500/50 rounded-xl p-4 flex flex-col justify-between gap-3 transition-all">
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2 text-amber-400 font-bold text-xs sm:text-sm">
+                    <FileJson className="w-4 h-4" />
+                    <span>نسخة احتياطية شاملة للنظام</span>
+                  </div>
+                  <span className="text-[10px] bg-amber-950 text-amber-300 border border-amber-800 px-2 py-0.5 rounded font-mono font-bold">
+                    JSON Backup
+                  </span>
+                </div>
+                <p className="text-[11px] text-slate-300 leading-relaxed font-medium">
+                  تنزيل ملف مدمج شامل لكافة بيانات المتجر: المنتجات، الأقسام، حسابات العملاء، الفواتير، الديون، والمقبوضات لحفظها خارج النظام بأمان.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => handleDownloadBackup('full')}
+                disabled={backupLoading === 'full'}
+                className="w-full py-2.5 px-3 bg-amber-600 hover:bg-amber-700 disabled:opacity-50 text-slate-950 font-black text-xs rounded-lg transition-colors flex items-center justify-center gap-2 shadow-sm"
+              >
+                {backupLoading === 'full' ? (
+                  <Loader2 className="w-4 h-4 animate-spin text-slate-950" />
+                ) : (
+                  <Download className="w-4 h-4" />
+                )}
+                <span>{backupLoading === 'full' ? 'جاري إنشاء النسخة...' : 'تنزيل النسخة الشاملة (Full JSON)'}</span>
+              </button>
+            </div>
+
+            {/* Card 3: Orders & Invoices CSV */}
+            <div className="bg-slate-800/90 border border-slate-700/80 hover:border-blue-500/50 rounded-xl p-4 flex flex-col justify-between gap-3 transition-all">
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2 text-blue-400 font-bold text-xs sm:text-sm">
+                    <FileSpreadsheet className="w-4 h-4" />
+                    <span>سجل الفواتير والمبيعات</span>
+                  </div>
+                  <span className="text-[10px] bg-blue-950 text-blue-300 border border-blue-800 px-2 py-0.5 rounded font-mono font-bold">
+                    CSV / Excel
+                  </span>
+                </div>
+                <p className="text-[11px] text-slate-300 leading-relaxed font-medium">
+                  تصدير سجل كامل بجميع الطلبات والفواتير الصادرة، بيانات التاجر، الإجمالي، الخصومات، المدفوع والمتبقي وحالات السداد.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => handleDownloadBackup('orders')}
+                disabled={backupLoading === 'orders'}
+                className="w-full py-2.5 px-3 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-black text-xs rounded-lg transition-colors flex items-center justify-center gap-2 shadow-sm"
+              >
+                {backupLoading === 'orders' ? (
+                  <Loader2 className="w-4 h-4 animate-spin text-white" />
+                ) : (
+                  <Download className="w-4 h-4" />
+                )}
+                <span>{backupLoading === 'orders' ? 'جاري التصدير...' : 'تصدير كشف الفواتير (Excel / CSV)'}</span>
+              </button>
+            </div>
+
+            {/* Card 4: Customers & Debts CSV */}
+            <div className="bg-slate-800/90 border border-slate-700/80 hover:border-purple-500/50 rounded-xl p-4 flex flex-col justify-between gap-3 transition-all">
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2 text-purple-400 font-bold text-xs sm:text-sm">
+                    <FileSpreadsheet className="w-4 h-4" />
+                    <span>كشف حسابات ومديونيات العملاء</span>
+                  </div>
+                  <span className="text-[10px] bg-purple-950 text-purple-300 border border-purple-800 px-2 py-0.5 rounded font-mono font-bold">
+                    CSV / Excel
+                  </span>
+                </div>
+                <p className="text-[11px] text-slate-300 leading-relaxed font-medium">
+                  تصدير كشف مالي تفصيلي بأسماء التجار، هواتفهم، المحلات، إجمالي المشتريات والمدفوعات، ورصيد المديونية المستحق على كل عميل.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => handleDownloadBackup('customers')}
+                disabled={backupLoading === 'customers'}
+                className="w-full py-2.5 px-3 bg-purple-600 hover:bg-purple-700 disabled:opacity-50 text-white font-black text-xs rounded-lg transition-colors flex items-center justify-center gap-2 shadow-sm"
+              >
+                {backupLoading === 'customers' ? (
+                  <Loader2 className="w-4 h-4 animate-spin text-white" />
+                ) : (
+                  <Download className="w-4 h-4" />
+                )}
+                <span>{backupLoading === 'customers' ? 'جاري التصدير...' : 'تصدير حسابات ومديونيات التجار'}</span>
+              </button>
+            </div>
+
+            {/* Card 5: Raw SQLite Binary Database */}
+            <div className="bg-slate-800/90 border border-slate-700/80 hover:border-cyan-500/50 rounded-xl p-4 flex flex-col justify-between gap-3 transition-all md:col-span-2 lg:col-span-2">
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2 text-cyan-400 font-bold text-xs sm:text-sm">
+                    <HardDrive className="w-4 h-4" />
+                    <span>ملف قاعدة البيانات الأصلي الخام (.sqlite)</span>
+                  </div>
+                  <span className="text-[10px] bg-cyan-950 text-cyan-300 border border-cyan-800 px-2 py-0.5 rounded font-mono font-bold">
+                    Database File (.sqlite)
+                  </span>
+                </div>
+                <p className="text-[11px] text-slate-300 leading-relaxed font-medium">
+                  تنزيل ملف قاعدة بيانات SQLite الأصلي بالكامل متضمناً كافة الجداول والفهارس والسجلات، وهو الملف المثالي للاحتفاظ بنسخة متطابقة يمكن استعادتها فورياً على أي سيرفر أو بيئة عمل.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => handleDownloadBackup('db')}
+                disabled={backupLoading === 'db'}
+                className="w-full py-2.5 px-3 bg-cyan-600 hover:bg-cyan-700 disabled:opacity-50 text-white font-black text-xs rounded-lg transition-colors flex items-center justify-center gap-2 shadow-sm"
+              >
+                {backupLoading === 'db' ? (
+                  <Loader2 className="w-4 h-4 animate-spin text-white" />
+                ) : (
+                  <Database className="w-4 h-4" />
+                )}
+                <span>{backupLoading === 'db' ? 'جاري تنزيل ملف الداتابيز...' : 'تنزيل ملف قاعدة البيانات كاملاً (.sqlite Database)'}</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Backup Success / Error Toast Inline */}
+          {backupToast && (
+            <div
+              className={`p-3 rounded-xl border flex items-center gap-2 text-xs font-bold ${
+                backupToast.type === 'success'
+                  ? 'bg-emerald-950/80 border-emerald-500/50 text-emerald-200'
+                  : 'bg-red-950/80 border-red-500/50 text-red-200'
+              }`}
+            >
+              {backupToast.type === 'success' ? (
+                <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+              ) : (
+                <ShieldAlert className="w-4 h-4 text-red-400 shrink-0" />
+              )}
+              <span>{backupToast.message}</span>
+            </div>
+          )}
         </div>
 
         {/* Submit Settings */}

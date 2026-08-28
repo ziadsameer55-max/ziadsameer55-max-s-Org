@@ -872,6 +872,322 @@ async function startServer() {
     }
   });
 
+  // =========================================================================
+  // ADMIN DATA BACKUP & EXCEL/CSV EXPORT ENGINE
+  // =========================================================================
+
+  function escapeCsvCell(val: any): string {
+    if (val === null || val === undefined) return '""';
+    const str = String(val).replace(/"/g, '""');
+    return `"${str}"`;
+  }
+
+  function buildCsvWithBom(headers: string[], rows: any[][]): string {
+    const BOM = '\uFEFF'; // UTF-8 Byte Order Mark so Microsoft Excel opens Arabic text flawlessly
+    const headerLine = headers.map(escapeCsvCell).join(',');
+    const dataLines = rows.map((r) => r.map(escapeCsvCell).join(',')).join('\r\n');
+    return BOM + headerLine + (dataLines ? '\r\n' + dataLines : '');
+  }
+
+  // 1. Full System Backup (JSON)
+  app.get('/api/admin/backup/full', requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const db = await getDb();
+      const user = (req as any).user;
+
+      // Extract all tables cleanly
+      const fetchTable = (query: string) => {
+        const res = db.exec(query);
+        if (!res || res.length === 0 || !res[0].values) return [];
+        const cols = res[0].columns;
+        return res[0].values.map((row) => {
+          const obj: Record<string, any> = {};
+          cols.forEach((c, idx) => {
+            obj[c] = row[idx];
+          });
+          return obj;
+        });
+      };
+
+      const products = fetchTable('SELECT * FROM products ORDER BY category, name');
+      const categories = fetchTable('SELECT * FROM categories');
+      const customers = fetchTable(
+        "SELECT id, username, fullName, phone, role, storeName, address FROM users WHERE role = 'customer' ORDER BY fullName"
+      );
+      const orders = fetchTable('SELECT * FROM orders ORDER BY createdAt DESC');
+      const orderItems = fetchTable('SELECT * FROM order_items');
+      const payments = fetchTable('SELECT * FROM payments ORDER BY createdAt DESC');
+      const deals = fetchTable('SELECT * FROM deals ORDER BY createdAt DESC');
+      const information = fetchTable('SELECT * FROM information ORDER BY createdAt DESC');
+      const sysSettings = await getSystemConfig(db);
+
+      const timestamp = new Date().toISOString();
+      const backupData = {
+        metadata: {
+          system: 'Halim Trading & Distribution Management System',
+          company: 'شركة الحليم للتجارة والتوزيع',
+          exportDate: timestamp,
+          exportedBy: {
+            id: user?.id,
+            username: user?.username,
+            fullName: user?.fullName,
+          },
+          summary: {
+            productsCount: products.length,
+            categoriesCount: categories.length,
+            customersCount: customers.length,
+            ordersCount: orders.length,
+            paymentsCount: payments.length,
+            dealsCount: deals.length,
+            informationCount: information.length,
+          },
+        },
+        settings: sysSettings,
+        categories,
+        products,
+        customers,
+        orders,
+        orderItems,
+        payments,
+        deals,
+        information,
+      };
+
+      const safeFilename = `halim_full_backup_${timestamp.slice(0, 10)}.json`;
+      res.setHeader('Content-Type', 'application/json; charset=utf-8');
+      res.setHeader('Content-Disposition', `attachment; filename="${safeFilename}"`);
+      res.send(JSON.stringify(backupData, null, 2));
+    } catch (err: any) {
+      console.error('Error generating full backup:', err);
+      res.status(500).json({ success: false, error: 'تعذر إنشاء النسخة الاحتياطية' });
+    }
+  });
+
+  // 2. Products Catalog Excel / CSV Sheet
+  app.get('/api/admin/backup/products.csv', requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const db = await getDb();
+      const resStmt = db.exec('SELECT * FROM products ORDER BY category, name');
+      const headers = [
+        'كود الصنف (ID)',
+        'اسم المنتج',
+        'القسم / التصنيف',
+        'سعر الجملة (ج.م)',
+        'وحدة البيع',
+        'الرصيد المتاح بالمخزن',
+        'الحد الأدنى للطلب',
+        'الحد الأقصى للطلب',
+        'حالة الصنف في الكتالوج',
+        'الوصف والملاحظات',
+        'رابط صورة المنتج',
+      ];
+
+      const rows: any[][] = [];
+      if (resStmt.length > 0 && resStmt[0].values) {
+        for (const row of resStmt[0].values) {
+          const statusText =
+            row[6] === 'open'
+              ? 'متاح للطلب 🟢'
+              : row[6] === 'locked'
+              ? 'مقفل مؤقتاً 🔒'
+              : row[6] === 'hidden'
+              ? 'مخفي من الكتالوج 👁️'
+              : String(row[6] || '');
+
+          rows.push([
+            String(row[0] || ''),
+            String(row[1] || ''),
+            String(row[2] || ''),
+            Number(row[3] || 0),
+            String(row[4] || ''),
+            Number(row[9] ?? 0),
+            Number(row[7] ?? 1),
+            row[8] !== null && row[8] !== undefined ? Number(row[8]) : 'غير محدد',
+            statusText,
+            String(row[10] || ''),
+            String(row[5] || ''),
+          ]);
+        }
+      }
+
+      const csvContent = buildCsvWithBom(headers, rows);
+      const safeFilename = `halim_products_sheet_${new Date().toISOString().slice(0, 10)}.csv`;
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+      res.setHeader('Content-Disposition', `attachment; filename="${safeFilename}"`);
+      res.send(csvContent);
+    } catch (err: any) {
+      console.error('Error exporting products CSV:', err);
+      res.status(500).json({ success: false, error: 'تعذر تصدير كشف المنتجات' });
+    }
+  });
+
+  // 3. Orders & Invoices Excel / CSV Sheet
+  app.get('/api/admin/backup/orders.csv', requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const db = await getDb();
+      const resStmt = db.exec('SELECT * FROM orders ORDER BY createdAt DESC');
+      const headers = [
+        'رقم الفاتورة',
+        'تاريخ ووقت الطلب',
+        'اسم التاجر / العميل',
+        'رقم هاتف العميل',
+        'عنوان المحل',
+        'عدد الأصناف',
+        'إجمالي الكميات (قطع)',
+        'المجموع الفرعي (ج.م)',
+        'الخصم (ج.م)',
+        'الإجمالي الصافي (ج.م)',
+        'المدفوع نقداً (ج.م)',
+        'المتبقي آجل (ج.م)',
+        'حالة الفاتورة',
+        'حالة السداد',
+        'المندوب المسؤول',
+        'ملاحظات العميل',
+        'ملاحظات الإدارة',
+      ];
+
+      const rows: any[][] = [];
+      if (resStmt.length > 0 && resStmt[0].values) {
+        for (const row of resStmt[0].values) {
+          const statusMap: Record<string, string> = {
+            Pending: 'قيد المراجعة ⏳',
+            Reviewing: 'جاري التجهيز 📦',
+            Approved: 'معتمد ومؤكد ✅',
+            Delivered: 'تم التسليم 🚚',
+            Cancelled: 'ملغي ❌',
+          };
+          const paymentMap: Record<string, string> = {
+            Paid: 'مدفوع بالكامل 🟢',
+            Partial: 'مدفوع جزئياً 🟡',
+            Unpaid: 'غير مدفوع (آجل) 🔴',
+          };
+
+          rows.push([
+            String(row[1] || ''),
+            String(row[8] || ''),
+            String(row[3] || ''),
+            String(row[4] || ''),
+            String(row[5] || ''),
+            Number(row[11] || 0),
+            Number(row[12] || 0),
+            Number(row[13] || 0),
+            Number(row[14] || 0),
+            Number(row[15] || 0),
+            Number(row[16] || 0),
+            Number(row[17] || 0),
+            statusMap[String(row[7])] || String(row[7] || ''),
+            paymentMap[String(row[18])] || String(row[18] || ''),
+            String(row[6] || ''),
+            String(row[19] || ''),
+            String(row[20] || ''),
+          ]);
+        }
+      }
+
+      const csvContent = buildCsvWithBom(headers, rows);
+      const safeFilename = `halim_orders_invoices_${new Date().toISOString().slice(0, 10)}.csv`;
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+      res.setHeader('Content-Disposition', `attachment; filename="${safeFilename}"`);
+      res.send(csvContent);
+    } catch (err: any) {
+      console.error('Error exporting orders CSV:', err);
+      res.status(500).json({ success: false, error: 'تعذر تصدير كشف الفواتير' });
+    }
+  });
+
+  // 4. Customers & Debts Excel / CSV Sheet
+  app.get('/api/admin/backup/customers.csv', requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const db = await getDb();
+      const usersStmt = db.exec(
+        "SELECT id, username, fullName, phone, storeName, address FROM users WHERE role = 'customer' ORDER BY fullName"
+      );
+
+      const headers = [
+        'كود العميل',
+        'اسم التاجر / العميل',
+        'رقم الهاتف',
+        'اسم المحل / النشاط',
+        'العنوان والمنطقة',
+        'إجمالي المشتريات (ج.م)',
+        'إجمالي المدفوعات (ج.م)',
+        'المديونية الحالية المستحقة (ج.م)',
+        'عدد الفواتير والطلبات',
+      ];
+
+      const rows: any[][] = [];
+      if (usersStmt.length > 0 && usersStmt[0].values) {
+        for (const userRow of usersStmt[0].values) {
+          const userId = String(userRow[0]);
+          const userPhone = String(userRow[3]);
+
+          // Compute Customer Financial Stats
+          const statsRes = db.exec(
+            `SELECT 
+              COALESCE(SUM(grandTotal), 0) as totalPurchases,
+              COALESCE(SUM(paidAmount), 0) as totalPaid,
+              COALESCE(SUM(remainingBalance), 0) as totalDebt,
+              COUNT(*) as ordersCount
+            FROM orders 
+            WHERE (customerId = '${userId}' OR customerPhone = '${userPhone}') AND status != 'Cancelled'`
+          );
+
+          let totalPurchases = 0;
+          let totalPaid = 0;
+          let totalDebt = 0;
+          let ordersCount = 0;
+
+          if (statsRes.length > 0 && statsRes[0].values && statsRes[0].values[0]) {
+            const vals = statsRes[0].values[0];
+            totalPurchases = Number(vals[0] || 0);
+            totalPaid = Number(vals[1] || 0);
+            totalDebt = Number(vals[2] || 0);
+            ordersCount = Number(vals[3] || 0);
+          }
+
+          rows.push([
+            userId,
+            String(userRow[2] || ''),
+            userPhone,
+            String(userRow[4] || ''),
+            String(userRow[5] || ''),
+            totalPurchases,
+            totalPaid,
+            totalDebt,
+            ordersCount,
+          ]);
+        }
+      }
+
+      const csvContent = buildCsvWithBom(headers, rows);
+      const safeFilename = `halim_customers_debts_${new Date().toISOString().slice(0, 10)}.csv`;
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+      res.setHeader('Content-Disposition', `attachment; filename="${safeFilename}"`);
+      res.send(csvContent);
+    } catch (err: any) {
+      console.error('Error exporting customers CSV:', err);
+      res.status(500).json({ success: false, error: 'تعذر تصدير كشف حسابات العملاء' });
+    }
+  });
+
+  // 5. Raw SQLite Binary Database Backup (Database raw file)
+  app.get('/api/admin/backup/database-raw', requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const db = await getDb();
+      const binaryData = db.export();
+      const buffer = Buffer.from(binaryData);
+      const safeFilename = `halim_database_${new Date().toISOString().slice(0, 10)}.sqlite`;
+
+      res.setHeader('Content-Type', 'application/x-sqlite3');
+      res.setHeader('Content-Disposition', `attachment; filename="${safeFilename}"`);
+      res.setHeader('Content-Length', buffer.length);
+      res.send(buffer);
+    } catch (err: any) {
+      console.error('Error downloading raw database file:', err);
+      res.status(500).json({ success: false, error: 'تعذر تحميل ملف قاعدة البيانات' });
+    }
+  });
+
   // Admin Audit Logs Endpoint
   app.get('/api/admin/audit-logs', requireAdmin, async (req: Request, res: Response) => {
     try {

@@ -71,6 +71,19 @@ export function getPageSizeCss(
     .print-tr-text { font-size: ${trFs}px !important; }
     .print-summary-text { font-size: ${sumFs}px !important; }
     .print-footer-text { font-size: ${footFs}px !important; }
+    .print-powered-by {
+      font-size: ${paperSize === '58mm' || paperSize === '57mm' ? 8 : 9}px !important;
+      direction: ltr !important;
+      text-align: center !important;
+      color: #334155 !important;
+      font-family: 'JetBrains Mono', 'Cairo', monospace !important;
+      font-weight: 700 !important;
+      letter-spacing: 0.2px !important;
+      margin-top: 6px !important;
+      padding-top: 4px !important;
+      padding-bottom: 8px !important;
+      border-top: 1px dashed #94a3b8 !important;
+    }
   `;
 }
 
