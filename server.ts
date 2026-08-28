@@ -1,5 +1,6 @@
 import express, { Request, Response } from 'express';
 import path from 'path';
+import fs from 'fs';
 import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI } from '@google/genai';
 import type { Database } from 'sql.js';
@@ -5119,10 +5120,27 @@ ${customerContext}
     });
     app.use(vite.middlewares);
   } else {
-    const distPath = path.join(process.cwd(), 'dist');
-    app.use(express.static(distPath));
-    app.get('*', (req, res) => {
-      res.sendFile(path.join(distPath, 'index.html'));
+    const cwdDist = path.join(process.cwd(), 'dist');
+    const localDist = path.resolve(__dirname);
+    const parentDist = path.resolve(__dirname, '..', 'dist');
+
+    let distPath = cwdDist;
+    if (fs.existsSync(path.join(cwdDist, 'index.html'))) {
+      distPath = cwdDist;
+    } else if (fs.existsSync(path.join(localDist, 'index.html'))) {
+      distPath = localDist;
+    } else if (fs.existsSync(path.join(parentDist, 'index.html'))) {
+      distPath = parentDist;
+    }
+
+    app.use(express.static(distPath, { index: false }));
+    app.get('*', (req: Request, res: Response) => {
+      const indexPath = path.join(distPath, 'index.html');
+      if (fs.existsSync(indexPath)) {
+        res.sendFile(indexPath);
+      } else {
+        res.status(404).send('Production build not found. Please run npm run build.');
+      }
     });
   }
 
