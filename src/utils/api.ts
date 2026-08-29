@@ -82,7 +82,7 @@ export async function parseApiResponse<T = any>(res: Response): Promise<{
         ok: res.ok,
         status,
         data: json,
-        error: res.ok ? undefined : json.message || json.error || `خطأ في الخادم (${status})`,
+        error: res.ok ? undefined : json.message || json.error || getStatusFallbackError(status),
       };
     } catch {
       return {
@@ -98,14 +98,56 @@ export async function parseApiResponse<T = any>(res: Response): Promise<{
     return {
       ok: false,
       status,
-      error: 'تعذر الاتصال بـ API: الخادم أعاد صفحة HTML (يرجى التأكد من تشغيل السيرفر أو ضبط VITE_API_URL)',
+      error: status === 405
+        ? 'طريقة الطلب غير مسموح بها (405 Method Not Allowed): الخادم أعاد صفحة HTML ثابتة. يرجى التأكد من تشغيل خادم الـ API.'
+        : 'تعذر الاتصال بـ API: الخادم أعاد صفحة HTML بدلاً من JSON (تأكد من تشغيل السيرفر أو ضبط VITE_API_URL).',
     };
+  }
+
+  // Try to parse rawText as JSON in case header was missing
+  if (rawText) {
+    try {
+      const parsed = JSON.parse(rawText);
+      if (parsed && typeof parsed === 'object') {
+        return {
+          ok: res.ok,
+          status,
+          data: parsed as T,
+          error: res.ok ? undefined : parsed.message || parsed.error || getStatusFallbackError(status),
+        };
+      }
+    } catch {}
   }
 
   return {
     ok: res.ok,
     status,
-    error: rawText || `خطأ غير متوقع (${status})`,
+    error: rawText.trim() || getStatusFallbackError(status),
   };
+}
+
+function getStatusFallbackError(status: number): string {
+  switch (status) {
+    case 400:
+      return 'طلب غير صالح، يرجى مراجعة البيانات المدخلة (400 Bad Request)';
+    case 401:
+      return 'انتهت صلاحية الجلسة أو يجب تسجيل الدخول مجدداً (401 Unauthorized)';
+    case 403:
+      return 'ليس لديك صلاحية للقيام بهذا الإجراء (403 Forbidden)';
+    case 404:
+      return 'الطلب أو المسار المطلوب غير موجود في الخادم (404 Not Found)';
+    case 405:
+      return 'طريقة الطلب غير مسموح بها (405 Method Not Allowed) - يرجى التأكد من اتصال التطبيق بالسيرفر';
+    case 429:
+      return 'تم تجاوز الحد المسموح من المحاولات، يرجى الانتظار قليلاً (429 Rate Limit)';
+    case 500:
+      return 'حدث خطأ داخلي في الخادم أثناء معالجة الطلب (500 Server Error)';
+    case 502:
+    case 503:
+    case 504:
+      return 'خادم النظام غير متاح حالياً، يرجى المحاولة بعد قليل';
+    default:
+      return `حدث خطأ غير متوقع (${status})`;
+  }
 }
 

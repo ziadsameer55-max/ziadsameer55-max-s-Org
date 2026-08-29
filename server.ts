@@ -826,7 +826,7 @@ async function startServer() {
   });
 
   // Update Profile Information (Customer Name, Store Name, Address)
-  app.put('/api/auth/profile', requireAuth, async (req: Request, res: Response) => {
+  const handleUpdateProfile = async (req: Request, res: Response) => {
     try {
       const user = (req as any).user as User;
       const { fullName, storeName, address } = req.body;
@@ -871,7 +871,10 @@ async function startServer() {
     } catch (err: any) {
       res.status(500).json({ success: false, error: 'حدث خطأ أثناء تحديث بيانات الحساب' });
     }
-  });
+  };
+  app.put('/api/auth/profile', requireAuth, handleUpdateProfile);
+  app.post('/api/auth/profile', requireAuth, handleUpdateProfile);
+  app.patch('/api/auth/profile', requireAuth, handleUpdateProfile);
 
   // =========================================================================
   // ADMIN DATA BACKUP & EXCEL/CSV EXPORT ENGINE
@@ -1489,7 +1492,7 @@ async function startServer() {
     }
   });
 
-  app.put('/api/products/:id/status', requireAdmin, async (req: Request, res: Response) => {
+  const handleProductStatus = async (req: Request, res: Response) => {
     try {
       const id = decodeURIComponent(req.params.id);
       const { status } = req.body;
@@ -1503,9 +1506,12 @@ async function startServer() {
     } catch (err: any) {
       res.status(500).json({ error: 'تعذر تعديل حالة المنتج' });
     }
-  });
+  };
+  app.put('/api/products/:id/status', requireAdmin, handleProductStatus);
+  app.post('/api/products/:id/status', requireAdmin, handleProductStatus);
+  app.patch('/api/products/:id/status', requireAdmin, handleProductStatus);
 
-  app.put('/api/products/:id/limits', requireAdmin, async (req: Request, res: Response) => {
+  const handleProductLimits = async (req: Request, res: Response) => {
     try {
       const id = decodeURIComponent(req.params.id);
       const { minQty, maxQty } = req.body;
@@ -1520,7 +1526,10 @@ async function startServer() {
     } catch (err: any) {
       res.status(500).json({ error: 'تعذر تعديل حدود الكميات' });
     }
-  });
+  };
+  app.put('/api/products/:id/limits', requireAdmin, handleProductLimits);
+  app.post('/api/products/:id/limits', requireAdmin, handleProductLimits);
+  app.patch('/api/products/:id/limits', requireAdmin, handleProductLimits);
 
   app.delete('/api/products/:id', requireAdmin, async (req: Request, res: Response) => {
     try {
@@ -1568,7 +1577,7 @@ async function startServer() {
     }
   });
 
-  app.put('/api/products/:id/stock', requireAdmin, async (req: Request, res: Response) => {
+  const handleProductStock = async (req: Request, res: Response) => {
     try {
       const id = decodeURIComponent(req.params.id);
       const { stock, lowStockThreshold } = req.body;
@@ -1584,7 +1593,10 @@ async function startServer() {
     } catch (err: any) {
       res.status(500).json({ error: 'تعذر تحديث كمية المخزون' });
     }
-  });
+  };
+  app.put('/api/products/:id/stock', requireAdmin, handleProductStock);
+  app.post('/api/products/:id/stock', requireAdmin, handleProductStock);
+  app.patch('/api/products/:id/stock', requireAdmin, handleProductStock);
 
   app.post('/api/products/reset-seed', requireAdmin, async (req: Request, res: Response) => {
     try {
@@ -1869,8 +1881,8 @@ async function startServer() {
     }
   });
 
-  // PUT Update Deal (Admin Only)
-  app.put('/api/deals/:id', requireAdmin, async (req: Request, res: Response) => {
+  // PUT / POST / PATCH Update Deal (Admin Only)
+  const handleUpdateDeal = async (req: Request, res: Response) => {
     try {
       const { id } = req.params;
       const dealData: Partial<DealOffer> = req.body;
@@ -1926,9 +1938,12 @@ async function startServer() {
     } catch (err: any) {
       res.status(500).json({ error: 'تعذر تعديل العرض' });
     }
-  });
+  };
+  app.put('/api/deals/:id', requireAdmin, handleUpdateDeal);
+  app.post('/api/deals/:id', requireAdmin, handleUpdateDeal);
+  app.patch('/api/deals/:id', requireAdmin, handleUpdateDeal);
 
-  // PATCH / PUT Toggle Deal Active State (Admin Only)
+  // PATCH / PUT / POST Toggle Deal Active State (Admin Only)
   const handleDealToggle = async (req: Request, res: Response) => {
     try {
       const { id } = req.params;
@@ -1942,6 +1957,7 @@ async function startServer() {
   };
   app.patch('/api/deals/:id/toggle', requireAdmin, handleDealToggle);
   app.put('/api/deals/:id/toggle', requireAdmin, handleDealToggle);
+  app.post('/api/deals/:id/toggle', requireAdmin, handleDealToggle);
 
   // DELETE Deal (Admin Only)
   app.delete('/api/deals/:id', requireAdmin, async (req: Request, res: Response) => {
@@ -2266,7 +2282,7 @@ async function startServer() {
   });
 
   // PUT Update Information (Admin Only)
-  app.put('/api/information/:id', requireAdmin, async (req: Request, res: Response) => {
+  const handleUpdateInformation = async (req: Request, res: Response) => {
     try {
       const { id } = req.params;
       const {
@@ -2358,9 +2374,12 @@ async function startServer() {
     } catch (err: any) {
       res.status(500).json({ success: false, error: 'تعذر تحديث المعلومة' });
     }
-  });
+  };
+  app.put('/api/information/:id', requireAdmin, handleUpdateInformation);
+  app.post('/api/information/:id', requireAdmin, handleUpdateInformation);
+  app.patch('/api/information/:id', requireAdmin, handleUpdateInformation);
 
-  // PATCH / PUT Quick Toggle Information Status (Admin Only)
+  // PATCH / PUT / POST Quick Toggle Information Status (Admin Only)
   const handleInfoStatusChange = async (req: Request, res: Response) => {
     try {
       const { id } = req.params;
@@ -2381,6 +2400,7 @@ async function startServer() {
   };
   app.patch('/api/information/:id/status', requireAdmin, handleInfoStatusChange);
   app.put('/api/information/:id/status', requireAdmin, handleInfoStatusChange);
+  app.post('/api/information/:id/status', requireAdmin, handleInfoStatusChange);
 
   // DELETE Information (Admin Only)
   app.delete('/api/information/:id', requireAdmin, async (req: Request, res: Response) => {
@@ -3483,7 +3503,7 @@ async function startServer() {
   });
 
   // Admin Order Edit (Admin Only)
-  app.put('/api/orders/:id/edit', requireAdmin, async (req: Request, res: Response) => {
+  const handleOrderEdit = async (req: Request, res: Response) => {
     try {
       const { id } = req.params;
       const { items, discount, status, notes, adminNotes, salesRep, performedBy } = req.body;
@@ -3574,10 +3594,13 @@ async function startServer() {
       console.error('Error editing order in PUT /api/orders/:id/edit:', err);
       res.status(500).json({ error: 'تعذر تعديل الطلب: ' + (err?.message || '') });
     }
-  });
+  };
+  app.put('/api/orders/:id/edit', requireAdmin, handleOrderEdit);
+  app.post('/api/orders/:id/edit', requireAdmin, handleOrderEdit);
+  app.patch('/api/orders/:id/edit', requireAdmin, handleOrderEdit);
 
   // Admin Order Status Update (Admin Only)
-  app.put('/api/orders/:id/status', requireAdmin, async (req: Request, res: Response) => {
+  const handleOrderStatusUpdate = async (req: Request, res: Response) => {
     try {
       const { id } = req.params;
       const { status, performedBy } = req.body as { status: OrderStatus; performedBy?: string };
@@ -3613,7 +3636,10 @@ async function startServer() {
     } catch (err: any) {
       res.status(500).json({ error: 'تعذر تحديث حالة الطلب' });
     }
-  });
+  };
+  app.put('/api/orders/:id/status', requireAdmin, handleOrderStatusUpdate);
+  app.post('/api/orders/:id/status', requireAdmin, handleOrderStatusUpdate);
+  app.patch('/api/orders/:id/status', requireAdmin, handleOrderStatusUpdate);
 
   // ==========================================
   // 5. PAYMENT & DEBT COLLECTION ENDPOINTS (ADMIN ONLY)
@@ -4683,8 +4709,8 @@ async function startServer() {
   app.get('/api/admin/customers', requireAdmin, handleGetAdminCustomers);
   app.get('/api/customers', requireAdmin, handleGetAdminCustomers);
 
-  // PUT Toggle / Update Customer Status (Active / Disabled) (Admin Only)
-  app.put('/api/admin/customers/:id/status', requireAdmin, async (req: Request, res: Response) => {
+  // PUT / POST / PATCH Toggle / Update Customer Status (Active / Disabled) (Admin Only)
+  const handleCustomerStatusChange = async (req: Request, res: Response) => {
     try {
       const { id } = req.params;
       const { status } = req.body;
@@ -4718,7 +4744,13 @@ async function startServer() {
     } catch (err: any) {
       res.status(500).json({ error: 'تعذر تغيير حالة حساب العميل' });
     }
-  });
+  };
+  app.put('/api/admin/customers/:id/status', requireAdmin, handleCustomerStatusChange);
+  app.post('/api/admin/customers/:id/status', requireAdmin, handleCustomerStatusChange);
+  app.patch('/api/admin/customers/:id/status', requireAdmin, handleCustomerStatusChange);
+  app.put('/api/customers/:id/status', requireAdmin, handleCustomerStatusChange);
+  app.post('/api/customers/:id/status', requireAdmin, handleCustomerStatusChange);
+  app.patch('/api/customers/:id/status', requireAdmin, handleCustomerStatusChange);
 
   // GET Payments (Admin gets all, Customer gets only their own - Protected)
   app.get('/api/payments', requireAuth, async (req: Request, res: Response) => {
