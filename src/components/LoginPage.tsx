@@ -15,8 +15,10 @@ import {
   HelpCircle,
   ArrowLeft,
   Sparkles,
+  X,
+  RefreshCw,
 } from 'lucide-react';
-import { apiFetch } from '../utils/api';
+import { apiFetch, parseApiResponse } from '../utils/api';
 
 interface LoginPageProps {
   onLoginSuccess: (user: User) => void;
@@ -32,6 +34,17 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess, onNavigate
   const [error, setError] = useState('');
   const [activeRoleTab, setActiveRoleTab] = useState<'customer' | 'admin'>('customer');
   const [isTouched, setIsTouched] = useState(false);
+
+  // Forgot / Reset Password Modal State
+  const [showForgotModal, setShowForgotModal] = useState(false);
+  const [forgotPhone, setForgotPhone] = useState('');
+  const [forgotStep, setForgotStep] = useState<1 | 2>(1);
+  const [resetToken, setResetToken] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmNewPassword, setConfirmNewPassword] = useState('');
+  const [forgotLoading, setForgotLoading] = useState(false);
+  const [forgotError, setForgotError] = useState('');
+  const [forgotSuccess, setForgotSuccess] = useState('');
 
   // Validate format of phone number or email address
   const validationState = useMemo(() => {
@@ -130,17 +143,102 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess, onNavigate
         }),
       });
 
-      const data = await res.json();
-      if (res.ok && data.success && data.user) {
-        onLoginSuccess(data.user);
+      const parsed = await parseApiResponse(res);
+      if (parsed.ok && parsed.data?.success && parsed.data?.user) {
+        onLoginSuccess(parsed.data.user);
       } else {
         // Generic secure error message preventing user enumeration
-        setError(data.message || 'بيانات الدخول غير صحيحة، يرجى مراجعة رقم الهاتف/اسم المستخدم وكلمة المرور');
+        setError(parsed.error || parsed.data?.message || 'بيانات الدخول غير صحيحة، يرجى مراجعة رقم الهاتف/اسم المستخدم وكلمة المرور');
       }
     } catch {
       setError('تعذر الاتصال بالخادم، يرجى التحقق من اتصال الإنترنت والمحاولة مجدداً');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleRequestReset = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setForgotError('');
+    setForgotSuccess('');
+
+    const clean = forgotPhone.trim();
+    if (!clean) {
+      setForgotError('يرجى إدخال رقم الهاتف المسجل');
+      return;
+    }
+
+    setForgotLoading(true);
+    try {
+      const res = await apiFetch('/api/auth/forgot-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone: clean }),
+      });
+      const parsed = await parseApiResponse(res);
+      if (parsed.ok && parsed.data?.success) {
+        if (parsed.data.resetToken) {
+          setResetToken(parsed.data.resetToken);
+          setForgotSuccess('تم إصدار رمز استعادة الحساب بنجاح. يرجى إدخال كلمة المرور الجديدة أدناه.');
+          setForgotStep(2);
+        } else {
+          setForgotSuccess(parsed.data.message || 'إذا كان رقم الهاتف مسجلاً لدينا، فسيتم قبول طلب استعادة الحساب.');
+        }
+      } else {
+        setForgotError(parsed.error || 'حدث خطأ أثناء معالجة الطلب');
+      }
+    } catch {
+      setForgotError('تعذر الاتصال بالخادم، يرجى المحاولة مرة أخرى');
+    } finally {
+      setForgotLoading(false);
+    }
+  };
+
+  const handleExecuteReset = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setForgotError('');
+    setForgotSuccess('');
+
+    if (newPassword.length < 6) {
+      setForgotError('كلمة المرور يجب ألا تقل عن 6 خانات.');
+      return;
+    }
+    if (newPassword !== confirmNewPassword) {
+      setForgotError('كلمة المرور وتأكيد كلمة المرور غير متطابقين');
+      return;
+    }
+
+    setForgotLoading(true);
+    try {
+      const res = await apiFetch('/api/auth/reset-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          phone: forgotPhone.trim(),
+          token: resetToken.trim(),
+          newPassword,
+          confirmPassword: confirmNewPassword,
+        }),
+      });
+      const parsed = await parseApiResponse(res);
+      if (parsed.ok && parsed.data?.success) {
+        setForgotSuccess('تم إعادة تعيين كلمة المرور بنجاح! جاري العودة لشاشة تسجيل الدخول...');
+        setTimeout(() => {
+          setShowForgotModal(false);
+          setForgotStep(1);
+          setForgotPhone('');
+          setResetToken('');
+          setNewPassword('');
+          setConfirmNewPassword('');
+          setForgotSuccess('');
+        }, 1800);
+      } else {
+        setForgotError(parsed.error || parsed.data?.message || 'رمز استعادة الحساب غير صحيح أو منتهي الصلاحية');
+      }
+    } catch {
+      setForgotError('تعذر الاتصال بالخادم أثناء استعادة الحساب');
+    } finally {
+      setForgotLoading(false);
     }
   };
 
@@ -347,7 +445,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess, onNavigate
             </div>
           </div>
 
-          {/* Remember Me Checkbox */}
+          {/* Remember Me Checkbox & Forgot Password */}
           <div className="flex items-center justify-between pt-1">
             <label className="flex items-center gap-2 cursor-pointer select-none">
               <input
@@ -358,6 +456,20 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess, onNavigate
               />
               <span className="text-xs text-slate-200 font-bold">تذكر تسجيل الدخول (30 يوم)</span>
             </label>
+
+            <button
+              type="button"
+              onClick={() => {
+                setShowForgotModal(true);
+                setForgotStep(1);
+                setForgotError('');
+                setForgotSuccess('');
+                setForgotPhone(identifier.trim());
+              }}
+              className="text-xs text-amber-400 hover:text-amber-300 font-bold transition-colors"
+            >
+              نسيت كلمة المرور؟
+            </button>
           </div>
 
           {/* Submit Button */}
@@ -399,6 +511,127 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess, onNavigate
         </div>
 
       </div>
+
+      {/* Forgot / Reset Password Modal */}
+      {showForgotModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm animate-fadeIn">
+          <div className="bg-slate-900 border-2 border-slate-700 rounded-3xl p-6 w-full max-w-md shadow-2xl relative">
+            <button
+              type="button"
+              onClick={() => setShowForgotModal(false)}
+              className="absolute top-4 left-4 p-2 text-slate-400 hover:text-white rounded-full hover:bg-slate-800 transition-colors"
+            >
+              <X className="w-5 h-5" />
+            </button>
+
+            <div className="text-center mb-5">
+              <div className="w-12 h-12 bg-amber-500/20 text-amber-400 rounded-2xl flex items-center justify-center mx-auto mb-3 border border-amber-500/30">
+                <RefreshCw className="w-6 h-6" />
+              </div>
+              <h3 className="text-lg font-black text-white">استعادة كلمة المرور</h3>
+              <p className="text-xs text-slate-300 mt-1">
+                {forgotStep === 1
+                  ? 'أدخل رقم الهاتف المسجل لتوليد رمز استعادة الحساب'
+                  : 'أدخل رمز الاستعادة وكلمة المرور الجديدة'}
+              </p>
+            </div>
+
+            {forgotError && (
+              <div className="mb-4 p-3 rounded-xl bg-red-950/90 border border-red-700 text-red-200 text-xs font-bold flex items-start gap-2">
+                <AlertCircle className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />
+                <span>{forgotError}</span>
+              </div>
+            )}
+
+            {forgotSuccess && (
+              <div className="mb-4 p-3 rounded-xl bg-emerald-950/90 border border-emerald-700 text-emerald-200 text-xs font-bold flex items-start gap-2">
+                <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+                <span>{forgotSuccess}</span>
+              </div>
+            )}
+
+            {forgotStep === 1 ? (
+              <form onSubmit={handleRequestReset} className="space-y-4">
+                <div>
+                  <label className="text-xs font-bold text-slate-300 mb-1.5 block">
+                    رقم الهاتف المسجل
+                  </label>
+                  <input
+                    type="text"
+                    value={forgotPhone}
+                    onChange={(e) => setForgotPhone(e.target.value)}
+                    placeholder="مثال: 01011112222"
+                    dir="ltr"
+                    required
+                    className="w-full bg-slate-950 text-white rounded-xl px-4 py-3 text-sm font-semibold border-2 border-slate-700 focus:outline-none focus:border-amber-400 focus:ring-2 focus:ring-amber-400/20 text-right"
+                  />
+                </div>
+                <button
+                  type="submit"
+                  disabled={forgotLoading}
+                  className="w-full py-3 px-4 rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 font-black text-sm transition-all flex items-center justify-center gap-2 shadow-lg disabled:opacity-60 cursor-pointer"
+                >
+                  {forgotLoading ? 'جاري التحقق...' : 'طلب رمز الاستعادة'}
+                </button>
+              </form>
+            ) : (
+              <form onSubmit={handleExecuteReset} className="space-y-3.5">
+                <div>
+                  <label className="text-xs font-bold text-slate-300 mb-1 block">
+                    رمز الاستعادة (Reset Token)
+                  </label>
+                  <input
+                    type="text"
+                    value={resetToken}
+                    onChange={(e) => setResetToken(e.target.value)}
+                    placeholder="رمز الاستعادة"
+                    dir="ltr"
+                    required
+                    className="w-full bg-slate-950 text-white rounded-xl px-3.5 py-2.5 text-xs font-mono border-2 border-slate-700 focus:outline-none focus:border-emerald-400 text-center"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs font-bold text-slate-300 mb-1 block">
+                    كلمة المرور الجديدة
+                  </label>
+                  <input
+                    type="password"
+                    value={newPassword}
+                    onChange={(e) => setNewPassword(e.target.value)}
+                    placeholder="6 خانات على الأقل"
+                    dir="ltr"
+                    required
+                    minLength={6}
+                    className="w-full bg-slate-950 text-white rounded-xl px-3.5 py-2.5 text-sm border-2 border-slate-700 focus:outline-none focus:border-emerald-400 text-right"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs font-bold text-slate-300 mb-1 block">
+                    تأكيد كلمة المرور الجديدة
+                  </label>
+                  <input
+                    type="password"
+                    value={confirmNewPassword}
+                    onChange={(e) => setConfirmNewPassword(e.target.value)}
+                    placeholder="أعد كتابة كلمة المرور"
+                    dir="ltr"
+                    required
+                    minLength={6}
+                    className="w-full bg-slate-950 text-white rounded-xl px-3.5 py-2.5 text-sm border-2 border-slate-700 focus:outline-none focus:border-emerald-400 text-right"
+                  />
+                </div>
+                <button
+                  type="submit"
+                  disabled={forgotLoading}
+                  className="w-full py-3 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-black text-sm transition-all flex items-center justify-center gap-2 shadow-lg disabled:opacity-60 cursor-pointer mt-2"
+                >
+                  {forgotLoading ? 'جاري التحديث...' : 'تحديث كلمة المرور والدخول'}
+                </button>
+              </form>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Footer Info */}
       <div className="mt-6 text-center space-y-1 select-none">

@@ -634,6 +634,21 @@ export async function initSchema(database: Database): Promise<void> {
       readAt TEXT NOT NULL,
       UNIQUE(informationId, userId)
     );
+
+    CREATE INDEX IF NOT EXISTS idx_orders_customerId ON orders(customerId);
+    CREATE INDEX IF NOT EXISTS idx_orders_customerPhone ON orders(customerPhone);
+    CREATE INDEX IF NOT EXISTS idx_orders_createdAt ON orders(createdAt);
+    CREATE INDEX IF NOT EXISTS idx_order_items_orderId ON order_items(orderId);
+    CREATE INDEX IF NOT EXISTS idx_order_items_productId ON order_items(productId);
+    CREATE INDEX IF NOT EXISTS idx_payments_orderId ON payments(orderId);
+    CREATE INDEX IF NOT EXISTS idx_payments_customerId ON payments(customerId);
+    CREATE INDEX IF NOT EXISTS idx_deals_productId ON deals(productId);
+    CREATE INDEX IF NOT EXISTS idx_deals_isActive ON deals(isActive);
+    CREATE INDEX IF NOT EXISTS idx_sessions_token ON sessions(token);
+    CREATE INDEX IF NOT EXISTS idx_sessions_userId ON sessions(userId);
+    CREATE INDEX IF NOT EXISTS idx_audit_logs_userId ON audit_logs(userId);
+    CREATE INDEX IF NOT EXISTS idx_audit_logs_timestamp ON audit_logs(timestamp);
+    CREATE INDEX IF NOT EXISTS idx_login_attempts_ident ON login_attempts(identifier, attemptTime);
   `);
 
   // Safe migration check for existing users table columns
