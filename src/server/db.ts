@@ -80,6 +80,33 @@ const INITIAL_ADMIN_CONFIG = {
   address: 'محافظة الإسكندرية - بجوار مسجد القويري - بوابة 8',
 };
 
+// SQL helper functions for parameterized queries
+export function queryAll<T = any>(database: Database, sql: string, params: any[] = []): T[] {
+  const stmt = database.prepare(sql);
+  if (params.length > 0) {
+    stmt.bind(params);
+  }
+  const results: T[] = [];
+  while (stmt.step()) {
+    results.push(stmt.getAsObject() as T);
+  }
+  stmt.free();
+  return results;
+}
+
+export function queryOne<T = any>(database: Database, sql: string, params: any[] = []): T | null {
+  const stmt = database.prepare(sql);
+  if (params.length > 0) {
+    stmt.bind(params);
+  }
+  let result: T | null = null;
+  if (stmt.step()) {
+    result = stmt.getAsObject() as T;
+  }
+  stmt.free();
+  return result;
+}
+
 // Database Backup Utility
 export function createDatabaseBackup(): string | null {
   try {
@@ -116,11 +143,16 @@ export async function getDb(): Promise<Database> {
       db = new SQL.Database(fileBuffer);
       await initSchema(db);
 
-      // Ensure categories are populated if empty
+      // Ensure categories and products are populated if empty
       const catRes = db.exec('SELECT COUNT(*) as count FROM categories');
       const catCount = (catRes[0]?.values[0]?.[0] as number) || 0;
       if (catCount === 0) {
         seedCategories(db);
+      }
+      const prodRes = db.exec('SELECT COUNT(*) as count FROM products');
+      const prodCount = (prodRes[0]?.values[0]?.[0] as number) || 0;
+      if (prodCount === 0) {
+        seedCategoriesAndProducts(db);
       }
       await syncAdminUserAccount(db);
       await syncCustomersTable(db);
@@ -549,7 +581,7 @@ export async function initSchema(database: Database): Promise<void> {
       unit TEXT NOT NULL,
       image TEXT NOT NULL,
       imageUrl TEXT,
-      status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'locked', 'hidden', 'archived', 'out_of_stock')),
+      status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open', 'active', 'locked', 'hidden', 'archived', 'out_of_stock')),
       description TEXT,
       createdAt TEXT,
       updatedAt TEXT
@@ -600,7 +632,7 @@ export async function initSchema(database: Database): Promise<void> {
       customerPhone TEXT NOT NULL,
       customerAddress TEXT,
       salesRep TEXT NOT NULL DEFAULT 'محمد فوزي',
-      status TEXT NOT NULL CHECK(status IN ('pending', 'reviewing', 'confirmed', 'processing', 'ready', 'out_for_delivery', 'delivered', 'cancelled', 'completed', 'Pending', 'Processing', 'Delivered', 'Cancelled')),
+      status TEXT NOT NULL CHECK(status IN ('Pending', 'Confirmed', 'Preparing', 'Out for Delivery', 'Delivered', 'Cancelled', 'Processing', 'Ready', 'Completed', 'pending', 'confirmed', 'preparing', 'out_for_delivery', 'delivered', 'cancelled', 'processing', 'ready', 'completed', 'reviewing')),
       createdAt TEXT NOT NULL,
       updatedAt TEXT NOT NULL,
       itemsCount INTEGER NOT NULL,
@@ -809,6 +841,15 @@ export async function initSchema(database: Database): Promise<void> {
       readAt TEXT NOT NULL,
       UNIQUE(informationId, userId)
     );
+
+    CREATE TABLE IF NOT EXISTS order_logs (
+      id TEXT PRIMARY KEY,
+      orderId TEXT NOT NULL,
+      timestamp TEXT NOT NULL,
+      action TEXT NOT NULL,
+      performedBy TEXT NOT NULL,
+      details TEXT
+    );
   `);
 
   // SAFE COLUMN MIGRATIONS FIRST (Ensures zero data loss across upgrades and columns exist before indexes)
@@ -817,6 +858,85 @@ export async function initSchema(database: Database): Promise<void> {
       database.run(`ALTER TABLE ${table} ADD COLUMN ${columnDef}`);
     } catch {}
   };
+
+  // Safe migration for products table CHECK constraint (allows 'open' status)
+  try {
+    const testSql = "INSERT INTO products (id, name, category, price, unit, image, status) VALUES ('__test_mig__', 'test', 'test', 1, 'علبة', 'test', 'open')";
+    database.run(testSql);
+    database.run("DELETE FROM products WHERE id = '__test_mig__'");
+  } catch {
+    try {
+      database.run(`
+        CREATE TABLE products_new (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          brand TEXT,
+          category TEXT NOT NULL,
+          categoryId TEXT,
+          size TEXT,
+          packaging TEXT,
+          unitsPerCase INTEGER DEFAULT 1,
+          unitType TEXT DEFAULT 'كرتونة',
+          price REAL NOT NULL CHECK(price >= 0),
+          stock INTEGER DEFAULT 100 CHECK(stock >= 0),
+          stockAlertThreshold INTEGER DEFAULT 5,
+          lowStockThreshold INTEGER DEFAULT 5,
+          minQty INTEGER DEFAULT 1 CHECK(minQty >= 1),
+          maxQty INTEGER,
+          unit TEXT NOT NULL,
+          image TEXT NOT NULL,
+          imageUrl TEXT,
+          status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open', 'active', 'locked', 'hidden', 'archived', 'out_of_stock')),
+          description TEXT,
+          createdAt TEXT,
+          updatedAt TEXT
+        );
+        INSERT INTO products_new (id, name, category, price, unit, image, status, minQty, maxQty, stock, description)
+        SELECT id, name, category, price, unit, image, 'open', minQty, maxQty, stock, description FROM products;
+        DROP TABLE products;
+        ALTER TABLE products_new RENAME TO products;
+      `);
+    } catch {}
+  }
+
+  // Safe migration for orders table CHECK constraint (allows 'Confirmed', 'Preparing', 'Out for Delivery')
+  try {
+    const testSql = "INSERT INTO orders (id, orderNumber, customerId, customerName, customerPhone, status, createdAt, updatedAt, itemsCount, totalQuantity, subtotal, grandTotal) VALUES ('__test_mig__', 'test', 'test', 'test', 'test', 'Confirmed', 'now', 'now', 1, 1, 1, 1)";
+    database.run(testSql);
+    database.run("DELETE FROM orders WHERE id = '__test_mig__'");
+  } catch {
+    try {
+      database.run(`
+        CREATE TABLE orders_new (
+          id TEXT PRIMARY KEY,
+          orderNumber TEXT UNIQUE NOT NULL,
+          customerId TEXT NOT NULL,
+          customerName TEXT NOT NULL,
+          customerPhone TEXT NOT NULL,
+          customerAddress TEXT,
+          salesRep TEXT NOT NULL DEFAULT 'محمد فوزي',
+          status TEXT NOT NULL CHECK(status IN ('Pending', 'Confirmed', 'Preparing', 'Out for Delivery', 'Delivered', 'Cancelled', 'Processing', 'Ready', 'Completed', 'pending', 'confirmed', 'preparing', 'out_for_delivery', 'delivered', 'cancelled', 'processing', 'ready', 'completed', 'reviewing')),
+          createdAt TEXT NOT NULL,
+          updatedAt TEXT NOT NULL,
+          itemsCount INTEGER NOT NULL,
+          totalQuantity INTEGER NOT NULL,
+          subtotal REAL NOT NULL CHECK(subtotal >= 0),
+          discount REAL DEFAULT 0 CHECK(discount >= 0),
+          grandTotal REAL NOT NULL CHECK(grandTotal >= 0),
+          total REAL,
+          paidAmount REAL DEFAULT 0 CHECK(paidAmount >= 0),
+          remainingBalance REAL DEFAULT 0,
+          remainingAmount REAL DEFAULT 0,
+          paymentStatus TEXT DEFAULT 'Unpaid' CHECK(paymentStatus IN ('Unpaid', 'Partial', 'Paid', 'unpaid', 'partial', 'paid')),
+          notes TEXT,
+          adminNotes TEXT
+        );
+        INSERT INTO orders_new SELECT * FROM orders;
+        DROP TABLE orders;
+        ALTER TABLE orders_new RENAME TO orders;
+      `);
+    } catch {}
+  }
 
   // users columns
   safeAddColumn('users', 'createdAt TEXT');

@@ -23,6 +23,8 @@ import {
   createPasswordResetToken,
   verifyAndConsumePasswordResetToken,
   createDatabaseBackup,
+  queryAll,
+  queryOne,
 } from './src/server/db.js';
 import { runComprehensiveDatabaseTests } from './src/server/testDatabase.js';
 import {
@@ -124,7 +126,12 @@ async function startServer() {
 
   // Health check endpoint
   app.get('/api/health', (req: Request, res: Response) => {
-    res.json({ status: 'ok', appName: 'شركة الحليم للتجارة والتوزيع' });
+    res.json({
+      status: 'ok',
+      server: 'running',
+      timestamp: new Date().toISOString(),
+      appName: 'شركة الحليم للتجارة والتوزيع',
+    });
   });
 
   // ==========================================
@@ -1397,7 +1404,7 @@ async function startServer() {
       const sysSettings = await getSystemConfig(db);
       const shouldHidePrices = !isAdmin && Boolean(sysSettings?.hidePrices);
 
-      let sql = 'SELECT * FROM products';
+      let sql = 'SELECT id, name, category, price, unit, image, status, minQty, maxQty, stock, description FROM products';
       if (!isAdmin) {
         sql += " WHERE status != 'hidden'";
       }
@@ -1414,7 +1421,7 @@ async function startServer() {
             price: shouldHidePrices ? 0 : Number(row[3]),
             unit: String(row[4]),
             image: String(row[5]),
-            status: row[6] as any,
+            status: (row[6] as any) || 'open',
             minQty: Number(row[7] ?? 1),
             maxQty: row[8] !== null && row[8] !== undefined ? Number(row[8]) : null,
             stock: Number(row[9] ?? 0),
@@ -2685,22 +2692,18 @@ async function startServer() {
 
       // Fetch items and compute real-time previous customer debt for each order
       for (const order of orders) {
-        const itemsRes = db.exec('SELECT * FROM order_items WHERE orderId = ?', [order.id]);
-        if (itemsRes.length > 0 && itemsRes[0].values) {
-          order.items = itemsRes[0].values.map((iRow) => ({
-            id: String(iRow[0]),
-            orderId: String(iRow[1]),
-            productId: String(iRow[2]),
-            productName: String(iRow[3]),
-            unitPrice: shouldHidePrices ? 0 : Number(iRow[4]),
-            quantity: Number(iRow[5]),
-            unit: String(iRow[6]),
-            discount: shouldHidePrices ? 0 : Number(iRow[7]),
-            totalPrice: shouldHidePrices ? 0 : Number(iRow[8]),
-          }));
-        } else {
-          order.items = [];
-        }
+        const rawItems = queryAll(db, 'SELECT id, orderId, productId, productName, unitPrice, quantity, unit, discount, totalPrice FROM order_items WHERE orderId = ?', [order.id]);
+        order.items = rawItems.map((item: any) => ({
+          id: String(item.id),
+          orderId: String(item.orderId),
+          productId: String(item.productId),
+          productName: String(item.productName),
+          unitPrice: shouldHidePrices ? 0 : Number(item.unitPrice || 0),
+          quantity: Number(item.quantity || 0),
+          unit: String(item.unit || 'قطعة'),
+          discount: shouldHidePrices ? 0 : Number(item.discount || 0),
+          totalPrice: shouldHidePrices ? 0 : Number(item.totalPrice || 0),
+        }));
 
         // Server-Side Debt Calculations
         const prevDebt = calculateCustomerPreviousDebt(db, order.customerId, order.customerPhone, order.id);
@@ -2764,23 +2767,18 @@ async function startServer() {
         (row.paymentStatus as any) ||
         (rawPaidAmount >= rawGrandTotal ? 'Paid' : rawPaidAmount > 0 ? 'Partial' : 'Unpaid');
 
-      const itemsRes = db.exec('SELECT * FROM order_items WHERE orderId = ?', [String(row.id)]);
-      const items: OrderItem[] = [];
-      if (itemsRes.length > 0 && itemsRes[0].values) {
-        for (const iRow of itemsRes[0].values) {
-          items.push({
-            id: String(iRow[0]),
-            orderId: String(iRow[1]),
-            productId: String(iRow[2]),
-            productName: String(iRow[3]),
-            unitPrice: shouldHidePrices ? 0 : Number(iRow[4]),
-            quantity: Number(iRow[5]),
-            unit: String(iRow[6]),
-            discount: shouldHidePrices ? 0 : Number(iRow[7]),
-            totalPrice: shouldHidePrices ? 0 : Number(iRow[8]),
-          });
-        }
-      }
+      const rawItems = queryAll(db, 'SELECT id, orderId, productId, productName, unitPrice, quantity, unit, discount, totalPrice FROM order_items WHERE orderId = ?', [String(row.id)]);
+      const items: OrderItem[] = rawItems.map((iRow: any) => ({
+        id: String(iRow.id),
+        orderId: String(iRow.orderId),
+        productId: String(iRow.productId),
+        productName: String(iRow.productName),
+        unitPrice: shouldHidePrices ? 0 : Number(iRow.unitPrice || 0),
+        quantity: Number(iRow.quantity || 0),
+        unit: String(iRow.unit || 'قطعة'),
+        discount: shouldHidePrices ? 0 : Number(iRow.discount || 0),
+        totalPrice: shouldHidePrices ? 0 : Number(iRow.totalPrice || 0),
+      }));
 
       // Server-Side Debt Calculations
       const prevDebt = calculateCustomerPreviousDebt(db, String(row.customerId), String(row.customerPhone), String(row.id));
@@ -2889,19 +2887,17 @@ async function startServer() {
           const finalRemaining = shouldHidePrices ? 0 : Math.max(0, totalDue - paidAmount);
 
           // Get items
-          const itemsRes = db.exec('SELECT * FROM order_items WHERE orderId = ?', [orderId]);
-          const items = itemsRes.length > 0 && itemsRes[0].values
-            ? itemsRes[0].values.map((iRow) => ({
-                id: String(iRow[0]),
-                productId: String(iRow[2]),
-                productName: String(iRow[3]),
-                unitPrice: shouldHidePrices ? 0 : Number(iRow[4]),
-                quantity: Number(iRow[5]),
-                unit: String(iRow[6]),
-                discount: shouldHidePrices ? 0 : Number(iRow[7]),
-                totalPrice: shouldHidePrices ? 0 : Number(iRow[8]),
-              }))
-            : [];
+          const rawItems = queryAll(db, 'SELECT id, orderId, productId, productName, unitPrice, quantity, unit, discount, totalPrice FROM order_items WHERE orderId = ?', [orderId]);
+          const items = rawItems.map((iRow: any) => ({
+            id: String(iRow.id),
+            productId: String(iRow.productId),
+            productName: String(iRow.productName),
+            unitPrice: shouldHidePrices ? 0 : Number(iRow.unitPrice || 0),
+            quantity: Number(iRow.quantity || 0),
+            unit: String(iRow.unit || 'قطعة'),
+            discount: shouldHidePrices ? 0 : Number(iRow.discount || 0),
+            totalPrice: shouldHidePrices ? 0 : Number(iRow.totalPrice || 0),
+          }));
 
           invoices.push({
             id: orderId,
@@ -2981,39 +2977,29 @@ async function startServer() {
         (row.paymentStatus as any) ||
         (rawPaidAmount >= rawGrandTotal ? 'Paid' : rawPaidAmount > 0 ? 'Partial' : 'Unpaid');
 
-      const itemsRes = db.exec('SELECT * FROM order_items WHERE orderId = ?', [String(row.id)]);
-      const items: any[] = [];
-      if (itemsRes.length > 0 && itemsRes[0].values) {
-        for (const iRow of itemsRes[0].values) {
-          items.push({
-            id: String(iRow[0]),
-            orderId: String(iRow[1]),
-            productId: String(iRow[2]),
-            productName: String(iRow[3]),
-            unitPrice: shouldHidePrices ? 0 : Number(iRow[4]),
-            quantity: Number(iRow[5]),
-            unit: String(iRow[6]),
-            discount: shouldHidePrices ? 0 : Number(iRow[7]),
-            totalPrice: shouldHidePrices ? 0 : Number(iRow[8]),
-          });
-        }
-      }
+      const rawItems = queryAll(db, 'SELECT id, orderId, productId, productName, unitPrice, quantity, unit, discount, totalPrice FROM order_items WHERE orderId = ?', [String(row.id)]);
+      const items: any[] = rawItems.map((iRow: any) => ({
+        id: String(iRow.id),
+        orderId: String(iRow.orderId),
+        productId: String(iRow.productId),
+        productName: String(iRow.productName),
+        unitPrice: shouldHidePrices ? 0 : Number(iRow.unitPrice || 0),
+        quantity: Number(iRow.quantity || 0),
+        unit: String(iRow.unit || 'قطعة'),
+        discount: shouldHidePrices ? 0 : Number(iRow.discount || 0),
+        totalPrice: shouldHidePrices ? 0 : Number(iRow.totalPrice || 0),
+      }));
 
       // Payments history for this order/invoice
-      const payRes = db.exec('SELECT * FROM payments WHERE orderId = ? OR orderNumber = ? ORDER BY createdAt DESC', [String(row.id), String(row.orderNumber)]);
-      const payments: any[] = [];
-      if (payRes.length > 0 && payRes[0].values) {
-        for (const pRow of payRes[0].values) {
-          payments.push({
-            id: String(pRow[0]),
-            amount: Number(pRow[6]),
-            paymentDate: String(pRow[7]),
-            paymentMethod: String(pRow[8]),
-            collectedBy: String(pRow[9]),
-            notes: pRow[10] ? String(pRow[10]) : undefined,
-          });
-        }
-      }
+      const rawPayments = queryAll(db, 'SELECT id, amount, paymentDate, paymentMethod, collectedBy, notes FROM payments WHERE orderId = ? OR orderNumber = ? ORDER BY createdAt DESC', [String(row.id), String(row.orderNumber)]);
+      const payments: any[] = rawPayments.map((pRow: any) => ({
+        id: String(pRow.id),
+        amount: Number(pRow.amount || 0),
+        paymentDate: String(pRow.paymentDate || ''),
+        paymentMethod: String(pRow.paymentMethod || 'Cash'),
+        collectedBy: String(pRow.collectedBy || 'الإدارة'),
+        notes: pRow.notes ? String(pRow.notes) : undefined,
+      }));
 
       // Server-Side Debt Calculations
       const prevDebt = calculateCustomerPreviousDebt(db, String(row.customerId), String(row.customerPhone), String(row.id));
@@ -3262,6 +3248,17 @@ async function startServer() {
     } catch (err: any) {
       res.status(500).json({ success: false, error: 'تعذر إعادة حساب السلة والأسعار من الخادم' });
     }
+  });
+
+  // Request logging middleware for /api/orders
+  app.use('/api/orders', async (req: Request, res: Response, next) => {
+    try {
+      const authUser = await getAuthUser(req);
+      const origin = req.headers.origin || req.headers.referer || 'same-origin';
+      const sessionState = authUser ? `authenticated (${authUser.role}: ${authUser.id})` : 'unauthenticated / guest';
+      console.log(`[ORDER API] ${req.method} ${req.originalUrl || req.url} | Origin: ${origin} | Session: ${sessionState} | Time: ${new Date().toISOString()}`);
+    } catch {}
+    next();
   });
 
   // POST Create Order (STRICT SERVER-SIDE PRICE RECALCULATION & VALIDATION)
@@ -3592,13 +3589,13 @@ async function startServer() {
       const { items, discount, status, notes, adminNotes, salesRep, performedBy } = req.body;
       const db = await getDb();
 
-      const ordCheck = db.exec('SELECT grandTotal, paidAmount, status FROM orders WHERE id = ?', [id]);
-      if (ordCheck.length === 0 || !ordCheck[0].values || ordCheck[0].values.length === 0) {
+      const ordCheck = queryOne(db, 'SELECT grandTotal, paidAmount, status FROM orders WHERE id = ?', [id]);
+      if (!ordCheck) {
         return res.status(404).json({ error: 'الطلب غير موجود' });
       }
 
-      const currentPaid = Number(ordCheck[0].values[0][1] || 0);
-      const currentStatus = String(ordCheck[0].values[0][2] || 'Confirmed');
+      const currentPaid = Number(ordCheck.paidAmount || 0);
+      const currentStatus = String(ordCheck.status || 'Confirmed');
       const finalStatus = status || currentStatus;
       const nowStr = new Date().toLocaleString('ar-EG', {
         dateStyle: 'short',
@@ -3696,13 +3693,11 @@ async function startServer() {
 
       // Deduct inventory stock if Confirmed
       if (status === 'Confirmed') {
-        const itemsRes = db.exec('SELECT productId, quantity FROM order_items WHERE orderId = ?', [id]);
-        if (itemsRes.length > 0 && itemsRes[0].values) {
-          for (const row of itemsRes[0].values) {
-            const pId = String(row[0]);
-            const qty = Number(row[1]);
-            db.run('UPDATE products SET stock = MAX(0, stock - ?) WHERE id = ?', [qty, pId]);
-          }
+        const orderItems = queryAll(db, 'SELECT productId, quantity FROM order_items WHERE orderId = ?', [id]);
+        for (const item of orderItems) {
+          const pId = String(item.productId);
+          const qty = Number(item.quantity || 0);
+          db.run('UPDATE products SET stock = MAX(0, stock - ?) WHERE id = ?', [qty, pId]);
         }
       }
 
@@ -3717,7 +3712,8 @@ async function startServer() {
       saveDb();
       res.json({ success: true, status });
     } catch (err: any) {
-      res.status(500).json({ error: 'تعذر تحديث حالة الطلب' });
+      console.error('Error in handleOrderStatusUpdate:', err);
+      res.status(500).json({ error: 'تعذر تحديث حالة الطلب: ' + (err?.message || '') });
     }
   };
   app.put('/api/orders/:id/status', requireAdmin, handleOrderStatusUpdate);
