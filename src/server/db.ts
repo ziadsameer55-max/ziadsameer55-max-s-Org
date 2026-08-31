@@ -7,6 +7,7 @@ import { Product, Category, Order, OrderItem, SystemSettings, User, OrderLog, Sy
 import { INITIAL_CATEGORIES, INITIAL_PRODUCTS } from './catalogData.js';
 
 const DB_DIR = path.resolve(process.cwd(), 'data');
+const BACKUP_DIR = path.resolve(DB_DIR, 'backups');
 const DB_FILE = path.resolve(DB_DIR, 'halim.sqlite');
 
 let db: Database | null = null;
@@ -79,6 +80,24 @@ const INITIAL_ADMIN_CONFIG = {
   address: 'محافظة الإسكندرية - بجوار مسجد القويري - بوابة 8',
 };
 
+// Database Backup Utility
+export function createDatabaseBackup(): string | null {
+  try {
+    if (!fs.existsSync(DB_FILE)) return null;
+    if (!fs.existsSync(BACKUP_DIR)) {
+      fs.mkdirSync(BACKUP_DIR, { recursive: true });
+    }
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const backupFile = path.resolve(BACKUP_DIR, `halim_backup_${timestamp}.sqlite`);
+    fs.copyFileSync(DB_FILE, backupFile);
+    console.log(`[Database Backup] Created secure backup at: ${backupFile}`);
+    return backupFile;
+  } catch (err) {
+    console.error('[Database Backup] Failed to create backup:', err);
+    return null;
+  }
+}
+
 export async function getDb(): Promise<Database> {
   if (db) return db;
 
@@ -90,6 +109,9 @@ export async function getDb(): Promise<Database> {
 
   if (fs.existsSync(DB_FILE)) {
     try {
+      // Create backup before migration
+      createDatabaseBackup();
+
       const fileBuffer = fs.readFileSync(DB_FILE);
       db = new SQL.Database(fileBuffer);
       await initSchema(db);
@@ -101,18 +123,24 @@ export async function getDb(): Promise<Database> {
         seedCategories(db);
       }
       await syncAdminUserAccount(db);
+      await syncCustomersTable(db);
+      await syncInvoicesTable(db);
       saveDb();
     } catch (err) {
       console.error('Database file corrupted or malformed, initializing fresh clean database:', err);
       db = new SQL.Database();
       await initSchema(db);
       await seedInitialData(db);
+      await syncCustomersTable(db);
+      await syncInvoicesTable(db);
       saveDb();
     }
   } else {
     db = new SQL.Database();
     await initSchema(db);
     await seedInitialData(db);
+    await syncCustomersTable(db);
+    await syncInvoicesTable(db);
     saveDb();
   }
 
@@ -148,22 +176,28 @@ export function createSession(
   durationMs: number = 24 * 60 * 60 * 1000 // 24 hours
 ): string {
   const token = crypto.randomBytes(32).toString('hex');
+  const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
   const now = Date.now();
   const expiresAt = now + durationMs;
 
   database.run(
-    `INSERT INTO sessions (token, userId, username, role, fullName, phone, storeName, address, createdAt, expiresAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO sessions (token, id, userId, tokenHash, username, role, fullName, phone, storeName, address, ipAddress, userAgent, createdAt, expiresAt, lastUsedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       token,
+      'sess_' + token.substring(0, 12),
       user.id,
+      tokenHash,
       user.username,
       user.role,
       user.fullName,
       user.phone,
       user.storeName || '',
       user.address || '',
+      '',
+      '',
       now,
       expiresAt,
+      now,
     ]
   );
   saveDb();
@@ -200,6 +234,11 @@ export function getSessionUser(database: Database, token: string): User | null {
       saveDb();
       return null;
     }
+
+    // Update lastUsedAt
+    try {
+      database.run(`UPDATE sessions SET lastUsedAt = ? WHERE token = ?`, [now, token.trim()]);
+    } catch {}
 
     return {
       id: String(row.userId),
@@ -242,14 +281,17 @@ export function logSecurityEvent(
     const id = 'sec-' + Date.now() + '-' + crypto.randomBytes(4).toString('hex');
     const timestamp = new Date().toISOString();
     database.run(
-      `INSERT INTO audit_logs (id, event, userId, username, ip, details, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO audit_logs (id, event, action, userId, username, ip, ipAddress, details, timestamp, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         id,
+        event,
         event,
         userId || null,
         username || null,
         ip || null,
+        ip || null,
         details || null,
+        timestamp,
         timestamp,
       ]
     );
@@ -268,9 +310,10 @@ export function recordLoginAttempt(
   try {
     const id = 'att-' + Date.now() + '-' + crypto.randomBytes(4).toString('hex');
     const now = Date.now();
+    const nowIso = new Date().toISOString();
     database.run(
-      `INSERT INTO login_attempts (id, identifier, ip, attemptTime, success) VALUES (?, ?, ?, ?, ?)`,
-      [id, identifier.trim().toLowerCase(), ip || '127.0.0.1', now, success ? 1 : 0]
+      `INSERT INTO login_attempts (id, identifier, ip, ipAddress, attemptTime, success, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [id, identifier.trim().toLowerCase(), ip || '127.0.0.1', ip || '127.0.0.1', now, success ? 1 : 0, nowIso]
     );
 
     // Clean up attempts older than 24 hours
@@ -432,39 +475,123 @@ export async function cleanupExpiredSessions(database: Database): Promise<void> 
   database.run(`DELETE FROM sessions WHERE expiresAt < ?`, [now]);
 }
 
+// -------------------------------------------------------------
+// COMPLETE PRODUCTION SCHEMA INITIALIZATION & SAFE MIGRATIONS
+// -------------------------------------------------------------
 export async function initSchema(database: Database): Promise<void> {
+  // 1. USERS TABLE
   database.run(`
     CREATE TABLE IF NOT EXISTS users (
       id TEXT PRIMARY KEY,
       username TEXT UNIQUE NOT NULL,
       password TEXT NOT NULL,
       fullName TEXT NOT NULL,
-      phone TEXT NOT NULL,
-      role TEXT NOT NULL,
+      phone TEXT UNIQUE NOT NULL,
+      role TEXT NOT NULL DEFAULT 'customer' CHECK(role IN ('admin', 'customer')),
       storeName TEXT,
-      address TEXT
+      address TEXT,
+      status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'disabled')),
+      createdAt TEXT,
+      updatedAt TEXT,
+      lastLoginAt TEXT
     );
+  `);
 
+  // 2. CUSTOMERS TABLE (1-to-1 Relationship with Users)
+  database.run(`
+    CREATE TABLE IF NOT EXISTS customers (
+      id TEXT PRIMARY KEY,
+      userId TEXT UNIQUE NOT NULL,
+      customerName TEXT NOT NULL,
+      shopName TEXT,
+      phone TEXT UNIQUE NOT NULL,
+      address TEXT,
+      status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'disabled')),
+      createdAt TEXT NOT NULL,
+      updatedAt TEXT NOT NULL,
+      FOREIGN KEY (userId) REFERENCES users(id) ON DELETE CASCADE
+    );
+  `);
+
+  // 3. CATEGORIES TABLE
+  database.run(`
     CREATE TABLE IF NOT EXISTS categories (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
-      icon TEXT
+      description TEXT,
+      imageUrl TEXT,
+      icon TEXT,
+      sortOrder INTEGER DEFAULT 0,
+      status TEXT DEFAULT 'active' CHECK(status IN ('active', 'disabled', 'hidden')),
+      createdAt TEXT,
+      updatedAt TEXT
     );
+  `);
 
+  // 4. PRODUCTS TABLE
+  database.run(`
     CREATE TABLE IF NOT EXISTS products (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
+      brand TEXT,
       category TEXT NOT NULL,
-      price REAL NOT NULL,
+      categoryId TEXT,
+      size TEXT,
+      packaging TEXT,
+      unitsPerCase INTEGER DEFAULT 1,
+      unitType TEXT DEFAULT 'كرتونة',
+      price REAL NOT NULL CHECK(price >= 0),
+      stock INTEGER DEFAULT 100 CHECK(stock >= 0),
+      stockAlertThreshold INTEGER DEFAULT 5,
+      lowStockThreshold INTEGER DEFAULT 5,
+      minQty INTEGER DEFAULT 1 CHECK(minQty >= 1),
+      maxQty INTEGER,
       unit TEXT NOT NULL,
       image TEXT NOT NULL,
-      status TEXT NOT NULL,
-      minQty INTEGER DEFAULT 1,
-      maxQty INTEGER,
-      stock INTEGER DEFAULT 100,
-      description TEXT
+      imageUrl TEXT,
+      status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'locked', 'hidden', 'archived', 'out_of_stock')),
+      description TEXT,
+      createdAt TEXT,
+      updatedAt TEXT
     );
+  `);
 
+  // 5. DEALS TABLE
+  database.run(`
+    CREATE TABLE IF NOT EXISTS deals (
+      id TEXT PRIMARY KEY,
+      productId TEXT NOT NULL,
+      productName TEXT,
+      productImage TEXT,
+      productBrand TEXT,
+      productSize TEXT,
+      productUnit TEXT,
+      category TEXT,
+      title TEXT,
+      description TEXT,
+      offerType TEXT NOT NULL DEFAULT 'discount',
+      badgeText TEXT NOT NULL,
+      offerPrice REAL NOT NULL CHECK(offerPrice >= 0),
+      dealPrice REAL,
+      originalPrice REAL NOT NULL CHECK(originalPrice >= 0),
+      discountPercentage REAL DEFAULT 0 CHECK(discountPercentage >= 0),
+      discountPercent REAL DEFAULT 0,
+      startDate TEXT NOT NULL,
+      endDate TEXT,
+      startAt TEXT,
+      endAt TEXT,
+      isActive INTEGER DEFAULT 1,
+      is_active INTEGER DEFAULT 1,
+      targetType TEXT DEFAULT 'all',
+      targetId TEXT,
+      createdAt TEXT NOT NULL,
+      updatedAt TEXT,
+      FOREIGN KEY (productId) REFERENCES products(id) ON DELETE CASCADE
+    );
+  `);
+
+  // 6. ORDERS TABLE
+  database.run(`
     CREATE TABLE IF NOT EXISTS orders (
       id TEXT PRIMARY KEY,
       orderNumber TEXT UNIQUE NOT NULL,
@@ -472,35 +599,70 @@ export async function initSchema(database: Database): Promise<void> {
       customerName TEXT NOT NULL,
       customerPhone TEXT NOT NULL,
       customerAddress TEXT,
-      salesRep TEXT NOT NULL,
-      status TEXT NOT NULL,
+      salesRep TEXT NOT NULL DEFAULT 'محمد فوزي',
+      status TEXT NOT NULL CHECK(status IN ('pending', 'reviewing', 'confirmed', 'processing', 'ready', 'out_for_delivery', 'delivered', 'cancelled', 'completed', 'Pending', 'Processing', 'Delivered', 'Cancelled')),
       createdAt TEXT NOT NULL,
       updatedAt TEXT NOT NULL,
       itemsCount INTEGER NOT NULL,
       totalQuantity INTEGER NOT NULL,
-      subtotal REAL NOT NULL,
-      discount REAL DEFAULT 0,
-      grandTotal REAL NOT NULL,
-      paidAmount REAL DEFAULT 0,
+      subtotal REAL NOT NULL CHECK(subtotal >= 0),
+      discount REAL DEFAULT 0 CHECK(discount >= 0),
+      grandTotal REAL NOT NULL CHECK(grandTotal >= 0),
+      total REAL,
+      paidAmount REAL DEFAULT 0 CHECK(paidAmount >= 0),
       remainingBalance REAL DEFAULT 0,
-      paymentStatus TEXT DEFAULT 'Unpaid',
+      remainingAmount REAL DEFAULT 0,
+      paymentStatus TEXT DEFAULT 'Unpaid' CHECK(paymentStatus IN ('Unpaid', 'Partial', 'Paid', 'unpaid', 'partial', 'paid')),
       notes TEXT,
       adminNotes TEXT
     );
+  `);
 
+  // 7. ORDER ITEMS TABLE (With Immutable Snapshots)
+  database.run(`
     CREATE TABLE IF NOT EXISTS order_items (
       id TEXT PRIMARY KEY,
       orderId TEXT NOT NULL,
       productId TEXT NOT NULL,
       productName TEXT NOT NULL,
-      unitPrice REAL NOT NULL,
-      quantity INTEGER NOT NULL,
+      productNameSnapshot TEXT,
+      brandSnapshot TEXT,
+      sizeSnapshot TEXT,
+      packagingSnapshot TEXT,
+      unitPrice REAL NOT NULL CHECK(unitPrice >= 0),
+      unitPriceSnapshot REAL,
+      quantity INTEGER NOT NULL CHECK(quantity > 0),
       unit TEXT NOT NULL,
-      discount REAL DEFAULT 0,
-      totalPrice REAL NOT NULL,
+      discount REAL DEFAULT 0 CHECK(discount >= 0),
+      totalPrice REAL NOT NULL CHECK(totalPrice >= 0),
+      itemTotal REAL,
+      dealId TEXT,
+      createdAt TEXT,
       FOREIGN KEY (orderId) REFERENCES orders(id) ON DELETE CASCADE
     );
+  `);
 
+  // 8. INVOICES TABLE
+  database.run(`
+    CREATE TABLE IF NOT EXISTS invoices (
+      id TEXT PRIMARY KEY,
+      invoiceNumber TEXT UNIQUE NOT NULL,
+      orderId TEXT UNIQUE,
+      customerId TEXT NOT NULL,
+      invoiceTotal REAL NOT NULL CHECK(invoiceTotal >= 0),
+      previousDebt REAL DEFAULT 0,
+      totalDue REAL NOT NULL,
+      paidAmount REAL DEFAULT 0 CHECK(paidAmount >= 0),
+      remainingAmount REAL DEFAULT 0,
+      status TEXT DEFAULT 'issued',
+      createdAt TEXT NOT NULL,
+      updatedAt TEXT NOT NULL,
+      FOREIGN KEY (orderId) REFERENCES orders(id) ON DELETE SET NULL
+    );
+  `);
+
+  // 9. PAYMENTS TABLE
+  database.run(`
     CREATE TABLE IF NOT EXISTS payments (
       id TEXT PRIMARY KEY,
       orderId TEXT,
@@ -508,91 +670,83 @@ export async function initSchema(database: Database): Promise<void> {
       customerId TEXT NOT NULL,
       customerName TEXT NOT NULL,
       customerPhone TEXT,
-      amount REAL NOT NULL,
+      invoiceId TEXT,
+      amount REAL NOT NULL CHECK(amount > 0),
       paymentDate TEXT NOT NULL,
       paymentMethod TEXT DEFAULT 'Cash',
       collectedBy TEXT NOT NULL,
+      createdBy TEXT,
       notes TEXT,
       createdAt TEXT NOT NULL
     );
+  `);
 
-    CREATE TABLE IF NOT EXISTS order_logs (
-      id TEXT PRIMARY KEY,
-      orderId TEXT NOT NULL,
-      timestamp TEXT NOT NULL,
-      action TEXT NOT NULL,
-      performedBy TEXT NOT NULL,
-      details TEXT
-    );
-
-    CREATE TABLE IF NOT EXISTS notifications (
-      id TEXT PRIMARY KEY,
-      title TEXT NOT NULL,
-      message TEXT NOT NULL,
-      type TEXT NOT NULL,
-      read INTEGER DEFAULT 0,
-      createdAt TEXT NOT NULL,
-      orderId TEXT
-    );
-
+  // 10. SETTINGS TABLE
+  database.run(`
     CREATE TABLE IF NOT EXISTS settings (
       key TEXT PRIMARY KEY,
-      value TEXT NOT NULL
+      value TEXT NOT NULL,
+      updatedAt TEXT
     );
+  `);
 
+  // 11. SESSIONS TABLE
+  database.run(`
     CREATE TABLE IF NOT EXISTS sessions (
       token TEXT PRIMARY KEY,
+      id TEXT,
       userId TEXT NOT NULL,
+      tokenHash TEXT,
       username TEXT NOT NULL,
       role TEXT NOT NULL,
       fullName TEXT NOT NULL,
       phone TEXT NOT NULL,
       storeName TEXT,
       address TEXT,
+      ipAddress TEXT,
+      userAgent TEXT,
       createdAt INTEGER NOT NULL,
-      expiresAt INTEGER NOT NULL
+      expiresAt INTEGER NOT NULL,
+      revokedAt INTEGER,
+      lastUsedAt INTEGER,
+      FOREIGN KEY (userId) REFERENCES users(id) ON DELETE CASCADE
     );
+  `);
 
-    CREATE TABLE IF NOT EXISTS deals (
-      id TEXT PRIMARY KEY,
-      productId TEXT NOT NULL,
-      productName TEXT NOT NULL,
-      productImage TEXT,
-      productBrand TEXT,
-      productSize TEXT,
-      productUnit TEXT,
-      category TEXT,
-      offerType TEXT NOT NULL,
-      badgeText TEXT NOT NULL,
-      offerPrice REAL NOT NULL,
-      originalPrice REAL NOT NULL,
-      discountPercentage REAL,
-      startDate TEXT NOT NULL,
-      endDate TEXT,
-      description TEXT,
-      isActive INTEGER DEFAULT 1,
-      targetType TEXT DEFAULT 'all',
-      targetId TEXT,
-      createdAt TEXT NOT NULL
-    );
+  // 12. AUDIT LOGS TABLE
+  database.run(`
     CREATE TABLE IF NOT EXISTS audit_logs (
       id TEXT PRIMARY KEY,
       event TEXT NOT NULL,
+      action TEXT,
       userId TEXT,
       username TEXT,
+      targetType TEXT,
+      targetId TEXT,
+      metadata TEXT,
       ip TEXT,
+      ipAddress TEXT,
       details TEXT,
-      timestamp TEXT NOT NULL
+      timestamp TEXT NOT NULL,
+      createdAt TEXT
     );
+  `);
 
+  // 13. LOGIN ATTEMPTS TABLE
+  database.run(`
     CREATE TABLE IF NOT EXISTS login_attempts (
       id TEXT PRIMARY KEY,
       identifier TEXT NOT NULL,
       ip TEXT NOT NULL,
+      ipAddress TEXT,
       attemptTime INTEGER NOT NULL,
-      success INTEGER NOT NULL
+      success INTEGER NOT NULL,
+      createdAt TEXT
     );
+  `);
 
+  // 14. PASSWORD RESETS TABLE
+  database.run(`
     CREATE TABLE IF NOT EXISTS password_resets (
       id TEXT PRIMARY KEY,
       userId TEXT NOT NULL,
@@ -600,9 +754,30 @@ export async function initSchema(database: Database): Promise<void> {
       tokenHash TEXT NOT NULL,
       expiresAt INTEGER NOT NULL,
       usedAt INTEGER,
+      createdAt TEXT NOT NULL,
+      FOREIGN KEY (userId) REFERENCES users(id) ON DELETE CASCADE
+    );
+  `);
+
+  // 15. NOTIFICATIONS TABLE
+  database.run(`
+    CREATE TABLE IF NOT EXISTS notifications (
+      id TEXT PRIMARY KEY,
+      customerId TEXT,
+      title TEXT NOT NULL,
+      message TEXT NOT NULL,
+      type TEXT NOT NULL,
+      relatedProductId TEXT,
+      relatedDealId TEXT,
+      read INTEGER DEFAULT 0,
+      isRead INTEGER DEFAULT 0,
+      orderId TEXT,
       createdAt TEXT NOT NULL
     );
+  `);
 
+  // 16. INFORMATION & READ TRACKING
+  database.run(`
     CREATE TABLE IF NOT EXISTS information (
       id TEXT PRIMARY KEY,
       title TEXT NOT NULL,
@@ -634,138 +809,210 @@ export async function initSchema(database: Database): Promise<void> {
       readAt TEXT NOT NULL,
       UNIQUE(informationId, userId)
     );
-
-    CREATE INDEX IF NOT EXISTS idx_orders_customerId ON orders(customerId);
-    CREATE INDEX IF NOT EXISTS idx_orders_customerPhone ON orders(customerPhone);
-    CREATE INDEX IF NOT EXISTS idx_orders_createdAt ON orders(createdAt);
-    CREATE INDEX IF NOT EXISTS idx_order_items_orderId ON order_items(orderId);
-    CREATE INDEX IF NOT EXISTS idx_order_items_productId ON order_items(productId);
-    CREATE INDEX IF NOT EXISTS idx_payments_orderId ON payments(orderId);
-    CREATE INDEX IF NOT EXISTS idx_payments_customerId ON payments(customerId);
-    CREATE INDEX IF NOT EXISTS idx_deals_productId ON deals(productId);
-    CREATE INDEX IF NOT EXISTS idx_deals_isActive ON deals(isActive);
-    CREATE INDEX IF NOT EXISTS idx_sessions_token ON sessions(token);
-    CREATE INDEX IF NOT EXISTS idx_sessions_userId ON sessions(userId);
-    CREATE INDEX IF NOT EXISTS idx_audit_logs_userId ON audit_logs(userId);
-    CREATE INDEX IF NOT EXISTS idx_audit_logs_timestamp ON audit_logs(timestamp);
-    CREATE INDEX IF NOT EXISTS idx_login_attempts_ident ON login_attempts(identifier, attemptTime);
   `);
 
-  // Safe migration check for existing users table columns
-  try {
-    database.run(`ALTER TABLE users ADD COLUMN createdAt TEXT`);
-  } catch {}
-  try {
-    database.run(`ALTER TABLE users ADD COLUMN status TEXT DEFAULT 'active'`);
-  } catch {}
+  // SAFE COLUMN MIGRATIONS FIRST (Ensures zero data loss across upgrades and columns exist before indexes)
+  const safeAddColumn = (table: string, columnDef: string) => {
+    try {
+      database.run(`ALTER TABLE ${table} ADD COLUMN ${columnDef}`);
+    } catch {}
+  };
 
-  // Safe migration check for existing orders table columns
-  try {
-    database.run(`ALTER TABLE orders ADD COLUMN paidAmount REAL DEFAULT 0`);
-  } catch {}
-  try {
-    database.run(`ALTER TABLE orders ADD COLUMN remainingBalance REAL DEFAULT 0`);
-  } catch {}
-  try {
-    database.run(`ALTER TABLE orders ADD COLUMN paymentStatus TEXT DEFAULT 'Unpaid'`);
-  } catch {}
+  // users columns
+  safeAddColumn('users', 'createdAt TEXT');
+  safeAddColumn('users', 'updatedAt TEXT');
+  safeAddColumn('users', 'lastLoginAt TEXT');
+  safeAddColumn('users', "status TEXT DEFAULT 'active'");
 
-  // Safe migration check for products lowStockThreshold
-  try {
-    database.run(`ALTER TABLE products ADD COLUMN lowStockThreshold INTEGER DEFAULT 5`);
-  } catch {}
+  // products columns
+  safeAddColumn('products', 'categoryId TEXT');
+  safeAddColumn('products', 'brand TEXT');
+  safeAddColumn('products', 'size TEXT');
+  safeAddColumn('products', 'packaging TEXT');
+  safeAddColumn('products', 'unitsPerCase INTEGER DEFAULT 1');
+  safeAddColumn('products', "unitType TEXT DEFAULT 'كرتونة'");
+  safeAddColumn('products', 'stockAlertThreshold INTEGER DEFAULT 5');
+  safeAddColumn('products', 'lowStockThreshold INTEGER DEFAULT 5');
+  safeAddColumn('products', 'imageUrl TEXT');
+  safeAddColumn('products', 'createdAt TEXT');
+  safeAddColumn('products', 'updatedAt TEXT');
 
-  // Sync and secure Admin account
+  // deals columns
+  safeAddColumn('deals', 'title TEXT');
+  safeAddColumn('deals', 'dealPrice REAL');
+  safeAddColumn('deals', 'discountPercent REAL');
+  safeAddColumn('deals', 'startAt TEXT');
+  safeAddColumn('deals', 'endAt TEXT');
+  safeAddColumn('deals', 'is_active INTEGER DEFAULT 1');
+  safeAddColumn('deals', 'updatedAt TEXT');
+
+  // orders columns
+  safeAddColumn('orders', 'total REAL');
+  safeAddColumn('orders', 'paidAmount REAL DEFAULT 0');
+  safeAddColumn('orders', 'remainingBalance REAL DEFAULT 0');
+  safeAddColumn('orders', 'remainingAmount REAL DEFAULT 0');
+  safeAddColumn('orders', "paymentStatus TEXT DEFAULT 'Unpaid'");
+
+  // order_items columns
+  safeAddColumn('order_items', 'productNameSnapshot TEXT');
+  safeAddColumn('order_items', 'brandSnapshot TEXT');
+  safeAddColumn('order_items', 'sizeSnapshot TEXT');
+  safeAddColumn('order_items', 'packagingSnapshot TEXT');
+  safeAddColumn('order_items', 'unitPriceSnapshot REAL');
+  safeAddColumn('order_items', 'itemTotal REAL');
+  safeAddColumn('order_items', 'dealId TEXT');
+  safeAddColumn('order_items', 'createdAt TEXT');
+
+  // payments columns
+  safeAddColumn('payments', 'invoiceId TEXT');
+  safeAddColumn('payments', 'createdBy TEXT');
+
+  // settings columns
+  safeAddColumn('settings', 'updatedAt TEXT');
+
+  // audit_logs columns
+  safeAddColumn('audit_logs', 'action TEXT');
+  safeAddColumn('audit_logs', 'targetType TEXT');
+  safeAddColumn('audit_logs', 'targetId TEXT');
+  safeAddColumn('audit_logs', 'metadata TEXT');
+  safeAddColumn('audit_logs', 'ipAddress TEXT');
+  safeAddColumn('audit_logs', 'createdAt TEXT');
+
+  // 17. PERFORMANCE & CONSTRAINT INDEXES (Created safely after all columns are added)
+  const safeCreateIndex = (indexSql: string) => {
+    try {
+      database.run(indexSql);
+    } catch (e) {
+      // Ignore if index already exists or on optional column
+    }
+  };
+
+  safeCreateIndex(`CREATE INDEX IF NOT EXISTS idx_users_phone ON users(phone);`);
+  safeCreateIndex(`CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);`);
+  safeCreateIndex(`CREATE INDEX IF NOT EXISTS idx_users_role ON users(role);`);
+  safeCreateIndex(`CREATE INDEX IF NOT EXISTS idx_customers_userId ON customers(userId);`);
+  safeCreateIndex(`CREATE INDEX IF NOT EXISTS idx_customers_phone ON customers(phone);`);
+  safeCreateIndex(`CREATE INDEX IF NOT EXISTS idx_orders_customerId ON orders(customerId);`);
+  safeCreateIndex(`CREATE INDEX IF NOT EXISTS idx_orders_customerPhone ON orders(customerPhone);`);
+  safeCreateIndex(`CREATE INDEX IF NOT EXISTS idx_orders_orderNumber ON orders(orderNumber);`);
+  safeCreateIndex(`CREATE INDEX IF NOT EXISTS idx_orders_createdAt ON orders(createdAt);`);
+  safeCreateIndex(`CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);`);
+  safeCreateIndex(`CREATE INDEX IF NOT EXISTS idx_order_items_orderId ON order_items(orderId);`);
+  safeCreateIndex(`CREATE INDEX IF NOT EXISTS idx_order_items_productId ON order_items(productId);`);
+  safeCreateIndex(`CREATE INDEX IF NOT EXISTS idx_invoices_customerId ON invoices(customerId);`);
+  safeCreateIndex(`CREATE INDEX IF NOT EXISTS idx_invoices_orderId ON invoices(orderId);`);
+  safeCreateIndex(`CREATE INDEX IF NOT EXISTS idx_invoices_invoiceNumber ON invoices(invoiceNumber);`);
+  safeCreateIndex(`CREATE INDEX IF NOT EXISTS idx_payments_customerId ON payments(customerId);`);
+  safeCreateIndex(`CREATE INDEX IF NOT EXISTS idx_payments_orderId ON payments(orderId);`);
+  safeCreateIndex(`CREATE INDEX IF NOT EXISTS idx_payments_invoiceId ON payments(invoiceId);`);
+  safeCreateIndex(`CREATE INDEX IF NOT EXISTS idx_payments_createdAt ON payments(createdAt);`);
+  safeCreateIndex(`CREATE INDEX IF NOT EXISTS idx_payments_paymentDate ON payments(paymentDate);`);
+  safeCreateIndex(`CREATE INDEX IF NOT EXISTS idx_products_category ON products(category);`);
+  safeCreateIndex(`CREATE INDEX IF NOT EXISTS idx_products_status ON products(status);`);
+  safeCreateIndex(`CREATE INDEX IF NOT EXISTS idx_deals_productId ON deals(productId);`);
+  safeCreateIndex(`CREATE INDEX IF NOT EXISTS idx_deals_isActive ON deals(isActive);`);
+  safeCreateIndex(`CREATE INDEX IF NOT EXISTS idx_sessions_token ON sessions(token);`);
+  safeCreateIndex(`CREATE INDEX IF NOT EXISTS idx_sessions_userId ON sessions(userId);`);
+  safeCreateIndex(`CREATE INDEX IF NOT EXISTS idx_audit_logs_userId ON audit_logs(userId);`);
+  safeCreateIndex(`CREATE INDEX IF NOT EXISTS idx_audit_logs_timestamp ON audit_logs(timestamp);`);
+  safeCreateIndex(`CREATE INDEX IF NOT EXISTS idx_login_attempts_ident ON login_attempts(identifier, attemptTime);`);
+  safeCreateIndex(`CREATE INDEX IF NOT EXISTS idx_notifications_customerId ON notifications(customerId);`);
+
+  // Sync Admin account
   await syncAdminUserAccount(database);
+}
 
-  // Update existing stored settings if address is still default Tanta
+// Synchronize all existing customer users into customers table
+export async function syncCustomersTable(database: Database): Promise<void> {
   try {
-    const res = database.exec(`SELECT value FROM settings WHERE key = 'system_config'`);
-    if (res.length > 0 && res[0].values.length > 0) {
-      const configStr = String(res[0].values[0][0]);
-      const config = JSON.parse(configStr);
-      if (!config.address || config.address.includes('طنطا')) {
-        config.address = 'محافظة الإسكندرية - بجوار مسجد القويري - بوابة 8';
-        database.run(`UPDATE settings SET value = ? WHERE key = 'system_config'`, [JSON.stringify(config)]);
+    const res = database.exec(`SELECT id, fullName, storeName, phone, address, status, createdAt FROM users WHERE role = 'customer'`);
+    if (res.length > 0 && res[0].values) {
+      const nowIso = new Date().toISOString();
+      for (const row of res[0].values) {
+        const userId = String(row[0]);
+        const customerName = String(row[1] || 'عميل');
+        const shopName = row[2] ? String(row[2]) : 'محل تجاري';
+        const phone = String(row[3] || '');
+        const address = row[4] ? String(row[4]) : 'الإسكندرية';
+        const status = row[5] === 'disabled' ? 'disabled' : 'active';
+        const createdAt = row[6] ? String(row[6]) : nowIso;
+
+        const check = database.prepare('SELECT id FROM customers WHERE userId = ? OR phone = ?');
+        check.bind([userId, phone]);
+        const exists = check.step();
+        check.free();
+
+        if (!exists) {
+          const custId = 'cust_' + userId.replace(/[^a-zA-Z0-9_-]/g, '_');
+          database.run(
+            `INSERT INTO customers (id, userId, customerName, shopName, phone, address, status, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [custId, userId, customerName, shopName, phone, address, status, createdAt, nowIso]
+          );
+        } else {
+          database.run(
+            `UPDATE customers SET customerName = ?, shopName = ?, address = ?, status = ?, updatedAt = ? WHERE userId = ? OR phone = ?`,
+            [customerName, shopName, address, status, nowIso, userId, phone]
+          );
+        }
       }
     }
   } catch (err) {
-    console.error('Error updating settings address:', err);
+    console.error('Error synchronizing customers table:', err);
   }
+}
 
-  // Seed sample initial information if none exists
+// Synchronize all orders with normalized invoices table
+export async function syncInvoicesTable(database: Database): Promise<void> {
   try {
-    const infoCount = database.exec(`SELECT COUNT(*) FROM information`);
-    const count = (infoCount[0]?.values[0]?.[0] as number) || 0;
-    if (count === 0) {
-      const now = new Date().toISOString();
-      const stmt = database.prepare(`
-        INSERT INTO information (
-          id, title, content, type, priority, targetType, targetId, targetName,
-          productId, productName, productImage, productUnit, oldPrice, newPrice, priceChangePercentage,
-          status, publishedAt, expiresAt, createdBy, createdAt, updatedAt
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `);
+    const res = database.exec(`SELECT id, orderNumber, customerId, customerPhone, grandTotal, paidAmount, remainingBalance, createdAt FROM orders WHERE status != 'Cancelled'`);
+    if (res.length > 0 && res[0].values) {
+      const nowIso = new Date().toISOString();
+      for (const row of res[0].values) {
+        const orderId = String(row[0]);
+        const orderNumber = String(row[1]);
+        const customerId = String(row[2]);
+        const grandTotal = Number(row[4] || 0);
+        const paidAmount = Number(row[5] || 0);
+        const remainingAmount = Number(row[6] !== null && row[6] !== undefined ? row[6] : Math.max(0, grandTotal - paidAmount));
+        const createdAt = String(row[7] || nowIso);
 
-      stmt.run([
-        'info-welcome-1',
-        'مرحباً بكم في منصة شركة الحليم للتجارة والتوزيع 🌟',
-        'يسر إدارة شركة الحليم للتجارة والتوزيع ومندوب المبيعات محمد فوزي الترحيب بكم في منصة طلبات الجملة المباشرة. يمكنكم تصفح أحدث عروض وأسعار المواد الغذائية والكانز والمشروبات وإرسال طلباتكم الفورية ومتابعة مديونياتكم بكل سهولة وشفافية.',
-        'general',
-        'high',
-        'all',
-        null,
-        null,
-        null,
-        null,
-        null,
-        null,
-        null,
-        null,
-        null,
-        'published',
-        now,
-        null,
-        'إدارة شركة الحليم',
-        now,
-        now,
-      ]);
+        const check = database.prepare('SELECT id FROM invoices WHERE orderId = ? OR invoiceNumber = ?');
+        const invNum = 'INV-' + orderNumber.replace('#', '');
+        check.bind([orderId, invNum]);
+        const exists = check.step();
+        check.free();
 
-      stmt.run([
-        'info-delivery-2',
-        'مواعيد التوصيل وخطوط السير في محافظة الإسكندرية 🚚',
-        'نحيط عملاءنا الكرام علماً بأن التوصيل يتم بصورة يومية لكافة مناطق الإسكندرية. نرجو تسجيل طلبياتكم قبل الساعة 2 ظهراً لضمان التحميل مع دوريات اليوم نفسه. للتواصل المباشر مع المندوب محمد فوزي: 01000000000.',
-        'policy',
-        'normal',
-        'all',
-        null,
-        null,
-        null,
-        null,
-        null,
-        null,
-        null,
-        null,
-        null,
-        'published',
-        now,
-        null,
-        'إدارة التوزيع',
-        now,
-        now,
-      ]);
-
-      stmt.free();
-      saveDb();
+        if (!exists) {
+          const invId = 'inv_' + orderId.replace(/^ord_/, '');
+          database.run(
+            `INSERT INTO invoices (id, invoiceNumber, orderId, customerId, invoiceTotal, previousDebt, totalDue, paidAmount, remainingAmount, status, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+              invId,
+              invNum,
+              orderId,
+              customerId,
+              grandTotal,
+              0,
+              grandTotal,
+              paidAmount,
+              remainingAmount,
+              paidAmount >= grandTotal ? 'paid' : paidAmount > 0 ? 'partial' : 'issued',
+              createdAt,
+              nowIso,
+            ]
+          );
+        }
+      }
     }
   } catch (err) {
-    console.error('Error seeding initial information:', err);
+    console.error('Error synchronizing invoices table:', err);
   }
 }
 
 export async function syncAdminUserAccount(database: Database): Promise<void> {
   try {
-    // 1. Permanently remove old legacy admin users and previous admin credentials
+    const nowIso = new Date().toISOString();
+    // 1. Permanently remove old legacy admin users
     database.run(`DELETE FROM users WHERE username IN ('admin', 'halim_admin', 'usr-admin', 'MohamedFawzy') OR (role = 'admin' AND username != 'mohamed.fawzy');`);
 
     // Invalidate old sessions for non-mohamed.fawzy admins
@@ -781,7 +1028,7 @@ export async function syncAdminUserAccount(database: Database): Promise<void> {
 
     if (exists) {
       database.run(
-        `UPDATE users SET username = ?, password = ?, fullName = ?, phone = ?, role = ?, storeName = ?, address = ? WHERE id = ? OR username = ?`,
+        `UPDATE users SET username = ?, password = ?, fullName = ?, phone = ?, role = ?, storeName = ?, address = ?, status = 'active', updatedAt = ? WHERE id = ? OR username = ?`,
         [
           INITIAL_ADMIN_CONFIG.username,
           hashedAdminPassword,
@@ -790,13 +1037,14 @@ export async function syncAdminUserAccount(database: Database): Promise<void> {
           INITIAL_ADMIN_CONFIG.role,
           INITIAL_ADMIN_CONFIG.storeName,
           INITIAL_ADMIN_CONFIG.address,
+          nowIso,
           INITIAL_ADMIN_CONFIG.id,
           INITIAL_ADMIN_CONFIG.username,
         ]
       );
     } else {
       database.run(
-        `INSERT INTO users (id, username, password, fullName, phone, role, storeName, address) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO users (id, username, password, fullName, phone, role, storeName, address, status, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           INITIAL_ADMIN_CONFIG.id,
           INITIAL_ADMIN_CONFIG.username,
@@ -806,6 +1054,9 @@ export async function syncAdminUserAccount(database: Database): Promise<void> {
           INITIAL_ADMIN_CONFIG.role,
           INITIAL_ADMIN_CONFIG.storeName,
           INITIAL_ADMIN_CONFIG.address,
+          'active',
+          nowIso,
+          nowIso,
         ]
       );
     }
@@ -815,7 +1066,7 @@ export async function syncAdminUserAccount(database: Database): Promise<void> {
 }
 
 export function seedCategories(database: Database): void {
-  // 1. Seed Categories if empty
+  // Seed Categories if empty
   database.run(`DELETE FROM categories;`);
   const catStmt = database.prepare(`INSERT INTO categories (id, name, icon) VALUES (?, ?, ?)`);
   for (const cat of INITIAL_CATEGORIES) {
@@ -858,50 +1109,6 @@ async function seedInitialData(database: Database): Promise<void> {
   // 1. Seed Master Admin (Hashed & Secured with Argon2id)
   await syncAdminUserAccount(database);
 
-  // Seed standard/sample customer accounts if they don't exist
-  try {
-    const demoPassword = process.env.DEMO_CUSTOMER_PASSWORD || 'Customer2026!#';
-    const hashedDemoPassword = await hashPassword(demoPassword);
-    const demoCustomers = [
-      {
-        id: 'usr-cust-nour-1',
-        username: '01011112222',
-        password: hashedDemoPassword,
-        fullName: 'أحمد محمود (سوبر ماركت النور)',
-        phone: '01011112222',
-        role: 'customer',
-        storeName: 'سوبر ماركت النور',
-        address: 'العجمي - الهانوفيل - شارع مسجد القويري',
-      },
-      {
-        id: 'usr-cust-ekhlas-2',
-        username: '01234567890',
-        password: hashedDemoPassword,
-        fullName: 'محمد علي (سوبر ماركت الإخلاص)',
-        phone: '01234567890',
-        role: 'customer',
-        storeName: 'سوبر ماركت الإخلاص',
-        address: 'سيدي بشر - شارع خالد بن الوليد',
-      },
-    ];
-
-    for (const cust of demoCustomers) {
-      const checkStmt = database.prepare('SELECT id FROM users WHERE phone = ? OR username = ?');
-      checkStmt.bind([cust.phone, cust.username]);
-      const exists = checkStmt.step();
-      checkStmt.free();
-
-      if (!exists) {
-        database.run(
-          `INSERT INTO users (id, username, password, fullName, phone, role, storeName, address) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-          [cust.id, cust.username, cust.password, cust.fullName, cust.phone, cust.role, cust.storeName, cust.address]
-        );
-      }
-    }
-  } catch (err) {
-    console.error('Error seeding demo customers:', err);
-  }
-
   // 2. Seed Official Categories
   seedCategories(database);
 
@@ -937,7 +1144,8 @@ async function seedInitialData(database: Database): Promise<void> {
   };
 
   database.run(
-    `INSERT OR IGNORE INTO settings (key, value) VALUES ('system_config', ?)`,
-    [JSON.stringify(settings)]
+    `INSERT OR IGNORE INTO settings (key, value, updatedAt) VALUES ('system_config', ?, ?)`,
+    [JSON.stringify(settings), new Date().toISOString()]
   );
 }
+

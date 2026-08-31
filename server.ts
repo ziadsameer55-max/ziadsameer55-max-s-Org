@@ -22,7 +22,9 @@ import {
   clearLoginAttempts,
   createPasswordResetToken,
   verifyAndConsumePasswordResetToken,
+  createDatabaseBackup,
 } from './src/server/db.js';
+import { runComprehensiveDatabaseTests } from './src/server/testDatabase.js';
 import {
   Product,
   Category,
@@ -4882,6 +4884,38 @@ async function startServer() {
     } catch (err: any) {
       console.error('Error recording payment:', err);
       res.status(500).json({ success: false, error: 'تعذر تسجيل الدفعة' });
+    }
+  });
+
+  // Automated Database Test Suite Endpoint (Admin Only)
+  const handleRunDatabaseTests = async (req: Request, res: Response) => {
+    try {
+      const report = await runComprehensiveDatabaseTests();
+      res.json({
+        success: true,
+        report,
+      });
+    } catch (err: any) {
+      console.error('Database tests failed:', err);
+      res.status(500).json({ success: false, error: err?.message || 'فشل تشغيل اختبارات قاعدة البيانات' });
+    }
+  };
+
+  app.get('/api/admin/run-database-tests', requireAdmin, handleRunDatabaseTests);
+  app.post('/api/admin/run-database-tests', requireAdmin, handleRunDatabaseTests);
+  app.get('/api/admin/database-tests', requireAdmin, handleRunDatabaseTests);
+
+  // Manual Database Backup Endpoint (Admin Only)
+  app.post('/api/admin/database-backup', requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const backupPath = createDatabaseBackup();
+      res.json({
+        success: true,
+        backupPath,
+        message: backupPath ? 'تم إنشاء نسخة احتياطية من قاعدة البيانات بنجاح' : 'تعذر إنشاء النسخة الاحتياطية',
+      });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: 'تعذر إنشاء النسخة الاحتياطية' });
     }
   });
 
