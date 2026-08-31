@@ -1347,6 +1347,46 @@ async function startServer() {
     }
   });
 
+  app.post('/api/categories', requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const { id, name, icon } = req.body;
+      if (!name) return res.status(400).json({ error: 'اسم القسم مطلوب' });
+      const catId = id || 'cat_' + Date.now();
+      const db = await getDb();
+      db.run('INSERT OR REPLACE INTO categories (id, name, icon) VALUES (?, ?, ?)', [catId, name, icon || null]);
+      saveDb();
+      res.json({ success: true, id: catId, name, icon });
+    } catch (err: any) {
+      res.status(500).json({ error: 'تعذر إضافة القسم' });
+    }
+  });
+
+  app.put('/api/categories/:id', requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const id = decodeURIComponent(req.params.id);
+      const { name, icon } = req.body;
+      if (!name) return res.status(400).json({ error: 'اسم القسم مطلوب' });
+      const db = await getDb();
+      db.run('UPDATE categories SET name = ?, icon = ? WHERE id = ?', [name, icon || null, id]);
+      saveDb();
+      res.json({ success: true, id, name, icon });
+    } catch (err: any) {
+      res.status(500).json({ error: 'تعذر تحديث القسم' });
+    }
+  });
+
+  app.delete('/api/categories/:id', requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const id = decodeURIComponent(req.params.id);
+      const db = await getDb();
+      db.run('DELETE FROM categories WHERE id = ?', [id]);
+      saveDb();
+      res.json({ success: true, id });
+    } catch (err: any) {
+      res.status(500).json({ error: 'تعذر حذف القسم' });
+    }
+  });
+
   app.get('/api/products', async (req: Request, res: Response) => {
     try {
       const authUser = await getAuthUser(req);
@@ -1389,11 +1429,11 @@ async function startServer() {
     }
   });
 
-  app.post('/api/products', requireAdmin, async (req: Request, res: Response) => {
+  const handleSaveProduct = async (req: Request, res: Response) => {
     try {
       const p: Product & { notifyPriceChange?: boolean } = req.body;
       const db = await getDb();
-      const id = p.id || 'p_' + Date.now();
+      const id = req.params.id ? decodeURIComponent(req.params.id) : (p.id || 'p_' + Date.now());
       const newPrice = Number(p.price) || 0;
 
       // Check if product previously existed and had a different price
@@ -1402,9 +1442,9 @@ async function startServer() {
       let existingUnit = p.unit;
       let existingImage = p.image;
 
-      if (p.id) {
+      if (id) {
         const prevStmt = db.prepare('SELECT price, name, unit, image FROM products WHERE id = ?');
-        prevStmt.bind([p.id]);
+        prevStmt.bind([id]);
         if (prevStmt.step()) {
           const row = prevStmt.getAsObject();
           previousPrice = Number(row.price) || 0;
@@ -1419,11 +1459,11 @@ async function startServer() {
         `INSERT OR REPLACE INTO products (id, name, category, price, unit, image, status, minQty, maxQty, stock, description) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           id,
-          p.name,
-          p.category,
+          p.name || existingProductName,
+          p.category || 'عام',
           newPrice,
-          p.unit,
-          p.image || 'https://images.unsplash.com/photo-1523362628745-0c100150b504?w=500',
+          p.unit || existingUnit || 'كرتونة',
+          p.image || existingImage || 'https://images.unsplash.com/photo-1523362628745-0c100150b504?w=500',
           p.status || 'open',
           p.minQty ?? 1,
           p.maxQty !== undefined && p.maxQty !== null ? Number(p.maxQty) : null,
@@ -1446,8 +1486,8 @@ async function startServer() {
           const pctFormatted = Math.abs(pctChange);
           const signText = isDecrease ? `انخفاض بنسبة ${pctFormatted}% 📉` : `تعديل بنسبة +${pctFormatted}% 📈`;
 
-          const infoTitle = `تحديث سعر: ${p.name} (${newPrice.toLocaleString('ar-EG')} ج.م)`;
-          const infoContent = `نحيط عملاءنا الكرام علماً بتحديث سعر صنف "${p.name}". السعر الجديد: ${newPrice.toLocaleString('ar-EG')} ج.م لكل ${p.unit || 'كرتونة'} (السعر السابق: ${(previousPrice || 0).toLocaleString('ar-EG')} ج.م - ${signText}). متاح الآن للطلب المباشر.`;
+          const infoTitle = `تحديث سعر: ${p.name || existingProductName} (${newPrice.toLocaleString('ar-EG')} ج.م)`;
+          const infoContent = `نحيط عملاءنا الكرام علماً بتحديث سعر صنف "${p.name || existingProductName}". السعر الجديد: ${newPrice.toLocaleString('ar-EG')} ج.م لكل ${p.unit || existingUnit || 'كرتونة'} (السعر السابق: ${(previousPrice || 0).toLocaleString('ar-EG')} ج.م - ${signText}). متاح الآن للطلب المباشر.`;
 
           createdInfoId = 'info_pc_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
           const nowIso = new Date().toISOString();
@@ -1469,7 +1509,7 @@ async function startServer() {
             null,
             null,
             id,
-            p.name,
+            p.name || existingProductName,
             p.image || existingImage || null,
             p.unit || existingUnit || 'كرتونة',
             previousPrice,
@@ -1491,6 +1531,47 @@ async function startServer() {
       res.json({ success: true, id, priceChangeNotificationId: createdInfoId });
     } catch (err: any) {
       res.status(500).json({ error: 'تعذر حفظ المنتج' });
+    }
+  };
+
+  app.post('/api/products', requireAdmin, handleSaveProduct);
+  app.put('/api/products/:id', requireAdmin, handleSaveProduct);
+  app.patch('/api/products/:id', requireAdmin, handleSaveProduct);
+  app.post('/api/products/:id', requireAdmin, handleSaveProduct);
+
+  app.get('/api/products/:id', async (req: Request, res: Response) => {
+    try {
+      const id = decodeURIComponent(req.params.id);
+      const authUser = await getAuthUser(req);
+      const isAdmin = authUser?.role === 'admin';
+      const db = await getDb();
+
+      const sysSettings = await getSystemConfig(db);
+      const shouldHidePrices = !isAdmin && Boolean(sysSettings?.hidePrices);
+
+      const stmt = db.prepare('SELECT * FROM products WHERE id = ?');
+      stmt.bind([id]);
+      if (stmt.step()) {
+        const row = stmt.getAsObject();
+        stmt.free();
+        return res.json({
+          id: String(row.id),
+          name: String(row.name),
+          category: String(row.category),
+          price: shouldHidePrices ? 0 : Number(row.price),
+          unit: String(row.unit),
+          image: String(row.image),
+          status: row.status,
+          minQty: Number(row.minQty ?? 1),
+          maxQty: row.maxQty !== null && row.maxQty !== undefined ? Number(row.maxQty) : null,
+          stock: Number(row.stock ?? 0),
+          description: row.description ? String(row.description) : undefined,
+        });
+      }
+      stmt.free();
+      res.status(404).json({ error: 'المنتج غير موجود' });
+    } catch (err: any) {
+      res.status(500).json({ error: 'تعذر جلب تفاصيل المنتج' });
     }
   });
 
@@ -3642,6 +3723,27 @@ async function startServer() {
   app.put('/api/orders/:id/status', requireAdmin, handleOrderStatusUpdate);
   app.post('/api/orders/:id/status', requireAdmin, handleOrderStatusUpdate);
   app.patch('/api/orders/:id/status', requireAdmin, handleOrderStatusUpdate);
+  app.put('/api/orders/:id', requireAdmin, handleOrderStatusUpdate);
+  app.patch('/api/orders/:id', requireAdmin, handleOrderStatusUpdate);
+
+  app.delete('/api/orders/:id', requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const db = await getDb();
+      const nowStr = new Date().toLocaleString('ar-EG');
+      
+      // Update status to Cancelled rather than hard deleting to preserve audit history
+      db.run('UPDATE orders SET status = ?, updatedAt = ? WHERE id = ?', ['Cancelled', nowStr, id]);
+      db.run(
+        `INSERT INTO order_logs (id, orderId, timestamp, action, performedBy, details) VALUES (?, ?, ?, ?, ?, ?)`,
+        ['log_' + Date.now(), id, nowStr, 'إلغاء الطلب', 'الإدارة', 'تم إلغاء الطلب بواسطة الإدارة']
+      );
+      saveDb();
+      res.json({ success: true, message: 'تم إلغاء الطلب بنجاح' });
+    } catch (err: any) {
+      res.status(500).json({ error: 'تعذر إلغاء الطلب' });
+    }
+  });
 
   // ==========================================
   // 5. PAYMENT & DEBT COLLECTION ENDPOINTS (ADMIN ONLY)
@@ -4754,6 +4856,87 @@ async function startServer() {
   app.post('/api/customers/:id/status', requireAdmin, handleCustomerStatusChange);
   app.patch('/api/customers/:id/status', requireAdmin, handleCustomerStatusChange);
 
+  // Get single customer details
+  app.get('/api/customers/:id', requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const authUser = (req as any).user as User;
+      if (authUser.role === 'customer' && authUser.id !== id && authUser.phone !== id) {
+        return res.status(403).json({ error: 'غير مصرح بعرض بيانات هذا العميل' });
+      }
+
+      const db = await getDb();
+      const stmt = db.prepare('SELECT id, username, fullName, phone, role, storeName, address, createdAt, status FROM users WHERE id = ? OR phone = ?');
+      stmt.bind([id, id]);
+      if (stmt.step()) {
+        const row = stmt.getAsObject();
+        stmt.free();
+        return res.json({
+          id: String(row.id),
+          username: String(row.username),
+          fullName: String(row.fullName),
+          phone: String(row.phone),
+          role: String(row.role),
+          storeName: row.storeName ? String(row.storeName) : '',
+          address: row.address ? String(row.address) : '',
+          createdAt: String(row.createdAt),
+          status: row.status === 'disabled' ? 'disabled' : 'active',
+        });
+      }
+      stmt.free();
+      res.status(404).json({ error: 'العميل غير موجود' });
+    } catch (err: any) {
+      res.status(500).json({ error: 'تعذر جلب بيانات العميل' });
+    }
+  });
+
+  // Create or update customer (Admin Only)
+  const handleSaveCustomer = async (req: Request, res: Response) => {
+    try {
+      const { id, username, fullName, phone, storeName, address, status, password } = req.body;
+      const custId = req.params.id || id || 'cust_' + Date.now();
+      if (!phone || !fullName) {
+        return res.status(400).json({ error: 'الاسم ورقم الهاتف مطلوبان' });
+      }
+      const db = await getDb();
+      const existingStmt = db.prepare('SELECT id, passwordHash FROM users WHERE id = ? OR phone = ?');
+      existingStmt.bind([custId, phone]);
+      let existingHash = 'halim_default_hash';
+      if (existingStmt.step()) {
+        const obj = existingStmt.getAsObject();
+        existingHash = String(obj.passwordHash || existingHash);
+      }
+      existingStmt.free();
+
+      const newHash = password ? hashPassword(password) : existingHash;
+      const nowIso = new Date().toISOString();
+
+      db.run(
+        `INSERT OR REPLACE INTO users (id, username, passwordHash, fullName, phone, role, storeName, address, createdAt, status)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          custId,
+          username || phone,
+          newHash,
+          fullName,
+          phone,
+          'customer',
+          storeName || '',
+          address || '',
+          nowIso,
+          status === 'disabled' ? 'disabled' : 'active',
+        ]
+      );
+      saveDb();
+      res.json({ success: true, id: custId, fullName, phone });
+    } catch (err: any) {
+      res.status(500).json({ error: 'تعذر حفظ بيانات العميل' });
+    }
+  };
+  app.post('/api/customers', requireAdmin, handleSaveCustomer);
+  app.put('/api/customers/:id', requireAdmin, handleSaveCustomer);
+  app.patch('/api/customers/:id', requireAdmin, handleSaveCustomer);
+
   // GET Payments (Admin gets all, Customer gets only their own - Protected)
   app.get('/api/payments', requireAuth, async (req: Request, res: Response) => {
     try {
@@ -5173,6 +5356,16 @@ ${customerContext}
     } catch (err: any) {
       res.status(500).json({ error: 'تعذر الاتصال بالمساعد الذكي' });
     }
+  });
+
+  // ==========================================
+  // API 404 CATCH-ALL (Prevents falling through to Vite/Static 405 HTML)
+  // ==========================================
+  app.all('/api/*', (req: Request, res: Response) => {
+    res.status(404).json({
+      success: false,
+      error: `المسار أو طريقة الطلب غير مدعومة: ${req.method} ${req.path}`,
+    });
   });
 
   // ==========================================
