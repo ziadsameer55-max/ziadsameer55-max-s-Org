@@ -62,6 +62,7 @@ export interface Category {
 
 export type OrderStatus =
   | 'Pending'
+  | 'New'
   | 'Confirmed'
   | 'Preparing'
   | 'Out for Delivery'
@@ -242,6 +243,7 @@ export interface SystemSettings {
   phoneSecondary: string;
   address: string;
   receiptFooter: string;
+  activityDescription?: string;
   paperSize: PaperSize;
   customWidthMm?: number; // Custom thermal width in mm (e.g. 72mm, 100mm)
   customHeightMm?: number; // Custom thermal/paper height in mm (optional)
@@ -369,6 +371,7 @@ export interface DealOffer {
   startDate: string; // YYYY-MM-DD or ISO string
   endDate?: string | null; // YYYY-MM-DD or ISO string (null = indefinite)
   description?: string;
+  minOrderQty?: number;
   isActive: boolean;
   targetType?: 'all' | 'specific_customer' | 'group';
   targetId?: string | null;

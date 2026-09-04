@@ -809,7 +809,11 @@ export const AdminCustomersManager: React.FC<AdminCustomersManagerProps> = ({
         <PrintStatementModal
           isOpen={isPrintModalOpen}
           onClose={() => setIsPrintModalOpen(false)}
-          statement={selectedStatement}
+          customer={selectedStatement.customer}
+          settings={null}
+          orders={selectedStatement.orders || []}
+          payments={selectedStatement.payments || []}
+          summary={selectedStatement.summary}
         />
       )}
 

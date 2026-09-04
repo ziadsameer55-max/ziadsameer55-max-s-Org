@@ -24,6 +24,7 @@ import {
   Check,
   AlertTriangle,
   RotateCcw,
+  Lock,
 } from 'lucide-react';
 import { CartItem } from './NotebookCatalog';
 import { apiFetch } from '../utils/api';

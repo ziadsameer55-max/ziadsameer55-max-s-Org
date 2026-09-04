@@ -66,7 +66,7 @@ export const AdminInformationManager: React.FC<AdminInformationManagerProps> = (
   const [formContent, setFormContent] = useState('');
   const [formType, setFormType] = useState<InformationType>('general');
   const [formPriority, setFormPriority] = useState<InformationPriority>('normal');
-  const [formTargetType, setFormTargetType] = useState<'all' | 'customer'>('all');
+  const [formTargetType, setFormTargetType] = useState<'all' | 'specific_customer' | 'group'>('all');
   const [formTargetId, setFormTargetId] = useState<string>('');
   const [formProductId, setFormProductId] = useState<string>('');
   const [formOldPrice, setFormOldPrice] = useState<string>('');
@@ -209,8 +209,8 @@ export const AdminInformationManager: React.FC<AdminInformationManagerProps> = (
         type: formType,
         priority: formPriority,
         targetType: formTargetType,
-        targetId: formTargetType === 'customer' ? formTargetId : null,
-        targetName: formTargetType === 'customer' ? (targetCustomer?.fullName || targetCustomer?.storeName || null) : null,
+        targetId: formTargetType === 'specific_customer' ? formTargetId : null,
+        targetName: formTargetType === 'specific_customer' ? (targetCustomer?.fullName || targetCustomer?.storeName || null) : null,
         productId: formProductId || null,
         productName: selectedProduct?.name || null,
         productImage: selectedProduct?.image || null,
@@ -631,7 +631,7 @@ export const AdminInformationManager: React.FC<AdminInformationManagerProps> = (
                         {getStatusLabel(item.status)}
                       </span>
 
-                      {item.targetType === 'customer' ? (
+                      {item.targetType === 'specific_customer' ? (
                         <span className="bg-blue-500/10 text-blue-400 border border-blue-500/20 px-2 py-0.5 rounded-md flex items-center gap-1">
                           <Users className="w-3 h-3" />
                           خاص بالعميل: {item.targetName || item.targetId}
@@ -954,15 +954,15 @@ export const AdminInformationManager: React.FC<AdminInformationManagerProps> = (
                   <label className="block text-xs font-bold text-slate-300 mb-1.5">الجمهور المستهدف</label>
                   <select
                     value={formTargetType}
-                    onChange={(e) => setFormTargetType(e.target.value as 'all' | 'customer')}
+                    onChange={(e) => setFormTargetType(e.target.value as 'all' | 'specific_customer')}
                     className="w-full bg-slate-950 border border-slate-700 text-white rounded-xl px-3.5 py-2.5 text-sm focus:outline-none focus:border-amber-500"
                   >
                     <option value="all">جميع العملاء في المتجر 👥</option>
-                    <option value="customer">عميل محدد بالاسم 👤</option>
+                    <option value="specific_customer">عميل محدد بالاسم 👤</option>
                   </select>
                 </div>
 
-                {formTargetType === 'customer' && (
+                {formTargetType === 'specific_customer' && (
                   <div>
                     <label className="block text-xs font-bold text-slate-300 mb-1.5">اختر العميل</label>
                     <select

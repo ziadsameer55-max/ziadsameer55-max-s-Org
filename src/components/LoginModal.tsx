@@ -27,7 +27,7 @@ interface LoginModalProps {
 }
 
 export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onLoginSuccess }) => {
-  const [viewMode, setViewMode] = useState<'login' | 'register'>('login');
+  const [viewMode, setViewMode] = useState<'login' | 'register' | 'forgot'>('login');
   const [authRole, setAuthRole] = useState<'customer' | 'admin'>('customer');
 
   // Login form state

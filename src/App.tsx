@@ -33,6 +33,7 @@ import { LoginPage } from './components/LoginPage';
 import { RegisterPage } from './components/RegisterPage';
 import { LoginModal } from './components/LoginModal';
 import { AIAssistant } from './components/AIAssistant';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import {
   ShoppingCart,
   Package,
@@ -91,14 +92,20 @@ export default function App() {
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
   const [isMobileAdminSidebarOpen, setIsMobileAdminSidebarOpen] = useState(false);
 
+  const userRef = React.useRef<User | null>(user);
+  useEffect(() => {
+    userRef.current = user;
+  }, [user]);
+
   // Safe navigation that strictly guards admin routes
-  const navigateTo = useCallback((target: string) => {
+  const navigateTo = useCallback((target: string, overrideUser?: User | null) => {
+    const effectiveUser = overrideUser !== undefined ? overrideUser : userRef.current;
     let clean = target.startsWith('/') ? target.slice(1) : target;
     clean = clean.replace(/^#\/?/, '');
     if (!clean) clean = 'catalog';
 
     // Strict Guard: Prevent any non-admin / customer from navigating to admin routes
-    if (clean.startsWith('admin') && user?.role !== 'admin') {
+    if (clean.startsWith('admin') && effectiveUser?.role !== 'admin') {
       clean = 'catalog';
       setToast({ message: 'عفواً، الدخول إلى لوحة الإدارة مخصص لحساب الإدارة فقط', type: 'error' });
       setTimeout(() => setToast(null), 3000);
@@ -111,7 +118,7 @@ export default function App() {
         window.history.pushState(null, '', newUrl);
       }
     } catch {}
-  }, [user?.role]);
+  }, []);
 
   const setActiveTab = (tab: string) => {
     navigateTo(tab);
@@ -121,7 +128,7 @@ export default function App() {
   useEffect(() => {
     const handlePopState = () => {
       let route = parseCurrentRoute();
-      if (route.startsWith('admin') && user?.role !== 'admin') {
+      if (route.startsWith('admin') && userRef.current?.role !== 'admin') {
         route = 'catalog';
         try {
           window.history.replaceState(null, '', '/catalog');
@@ -136,7 +143,7 @@ export default function App() {
       window.removeEventListener('popstate', handlePopState);
       window.removeEventListener('hashchange', handlePopState);
     };
-  }, [user?.role]);
+  }, []);
 
   // Favorites stored in localStorage
   const [favorites, setFavorites] = useState<string[]>(() => {
@@ -273,12 +280,14 @@ export default function App() {
     try {
       localStorage.setItem('halim_user', JSON.stringify(u));
     } catch {}
+    userRef.current = u;
     setUser(u);
-    showToast(`مرحباً بك، ${u.fullName}`);
+    setIsLoginOpen(false);
+    showToast(`مرحباً بك، ${u.fullName || u.username}`);
     if (u.role === 'admin') {
-      navigateTo('/admin-orders');
+      navigateTo('/admin-orders', u);
     } else {
-      navigateTo('/catalog');
+      navigateTo('/catalog', u);
     }
     fetchData();
   };
@@ -549,8 +558,21 @@ export default function App() {
   const isAdmin = Boolean(user && user.role === 'admin');
   const isAdminView = isAdmin && activeTab.startsWith('admin');
 
+  // Loading screen while validating initial session
+  if (isAuthChecking) {
+    return (
+      <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center p-4 text-center select-none" dir="rtl">
+        <div className="w-16 h-16 rounded-3xl bg-white/10 p-3.5 border border-white/20 shadow-2xl flex items-center justify-center mb-4">
+          <RefreshCw className="w-8 h-8 text-amber-400 animate-spin" />
+        </div>
+        <h1 className="text-white font-black text-base sm:text-lg mb-1">شركة الحليم للتجارة والتوزيع</h1>
+        <p className="text-slate-400 text-xs font-bold">جاري تحميل المنصة والتحقق من الحساب...</p>
+      </div>
+    );
+  }
+
   // If user is not authenticated, render standalone authentication pages
-  if (!isAuthChecking && !user) {
+  if (!user) {
     if (activeTab === 'register') {
       return (
         <div dir="rtl">
@@ -568,7 +590,9 @@ export default function App() {
               </div>
             </div>
           )}
-          <RegisterPage onRegisterSuccess={handleLoginSuccess} onNavigate={navigateTo} />
+          <ErrorBoundary sectionName="صفحة إنشاء الحساب" onReset={() => navigateTo('catalog')}>
+            <RegisterPage onRegisterSuccess={handleLoginSuccess} onNavigate={navigateTo} />
+          </ErrorBoundary>
         </div>
       );
     }
@@ -590,7 +614,9 @@ export default function App() {
             </div>
           </div>
         )}
-        <LoginPage onLoginSuccess={handleLoginSuccess} onNavigate={navigateTo} />
+        <ErrorBoundary sectionName="صفحة تسجيل الدخول" onReset={() => navigateTo('catalog')}>
+          <LoginPage onLoginSuccess={handleLoginSuccess} onNavigate={navigateTo} />
+        </ErrorBoundary>
       </div>
     );
   }
@@ -622,18 +648,20 @@ export default function App() {
       {isAdminView && user?.role === 'admin' ? (
         <div className="flex min-h-screen bg-slate-100">
           {/* Persistent / Responsive Sidebar */}
-          <AdminSidebar
-            activeTab={activeTab}
-            setActiveTab={setActiveTab}
-            user={user}
-            settings={settings}
-            orders={orders}
-            products={products}
-            onToggleOrdersOpen={handleToggleOrdersOpen}
-            onLogout={handleLogout}
-            isOpenMobile={isMobileAdminSidebarOpen}
-            onCloseMobile={() => setIsMobileAdminSidebarOpen(false)}
-          />
+          <ErrorBoundary sectionName="القائمة الجانبية للإدارة">
+            <AdminSidebar
+              activeTab={activeTab}
+              setActiveTab={setActiveTab}
+              user={user}
+              settings={settings}
+              orders={orders}
+              products={products}
+              onToggleOrdersOpen={() => handleToggleOrdersOpen(!settings?.manualOrdersOpen)}
+              onLogout={handleLogout}
+              isOpenMobile={isMobileAdminSidebarOpen}
+              onCloseMobile={() => setIsMobileAdminSidebarOpen(false)}
+            />
+          </ErrorBoundary>
 
           {/* Admin Main Content Wrapper */}
           <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
@@ -689,79 +717,81 @@ export default function App() {
 
             {/* Admin Body Screen */}
             <main className="flex-1 p-3 sm:p-5 max-w-6xl w-full mx-auto overflow-y-auto">
-              {activeTab === 'admin-orders' && (
-                <AdminFastOrders
-                  orders={orders}
-                  settings={settings}
-                  allProducts={products}
-                  onToggleOrdersOpen={handleToggleOrdersOpen}
-                  onUpdateStatus={handleUpdateOrderStatus}
-                  onOpenEditModal={(ord) => setEditingOrder(ord)}
-                  onOpenPrintModal={(ord) => setPrintingOrder(ord)}
-                  onRefreshData={fetchData}
-                />
-              )}
+              <ErrorBoundary sectionName="لوحة تحكم الإدارة" onReset={fetchData}>
+                {activeTab === 'admin-orders' && (
+                  <AdminFastOrders
+                    orders={orders}
+                    settings={settings}
+                    allProducts={products}
+                    onToggleOrdersOpen={handleToggleOrdersOpen}
+                    onUpdateStatus={handleUpdateOrderStatus}
+                    onOpenEditModal={(ord) => setEditingOrder(ord)}
+                    onOpenPrintModal={(ord) => setPrintingOrder(ord)}
+                    onRefreshData={fetchData}
+                  />
+                )}
 
-              {activeTab === 'admin-customers' && (
-                <AdminCustomersManager
-                  onOpenOrderDetails={(orderId) => {
-                    const ord = orders.find((o) => o.id === orderId);
-                    if (ord) setEditingOrder(ord);
-                  }}
-                  onRefreshData={fetchData}
-                />
-              )}
+                {activeTab === 'admin-customers' && (
+                  <AdminCustomersManager
+                    onOpenOrderDetails={(orderId) => {
+                      const ord = orders.find((o) => o.id === orderId);
+                      if (ord) setEditingOrder(ord);
+                    }}
+                    onRefreshData={fetchData}
+                  />
+                )}
 
-              {activeTab === 'admin-debts' && (
-                <AdminDebtsManager
-                  settings={settings}
-                  onOpenOrderDetails={(orderId) => {
-                    const ord = orders.find((o) => o.id === orderId);
-                    if (ord) setEditingOrder(ord);
-                  }}
-                  onRefreshData={fetchData}
-                />
-              )}
+                {activeTab === 'admin-debts' && (
+                  <AdminDebtsManager
+                    settings={settings}
+                    onOpenOrderDetails={(orderId) => {
+                      const ord = orders.find((o) => o.id === orderId);
+                      if (ord) setEditingOrder(ord);
+                    }}
+                    onRefreshData={fetchData}
+                  />
+                )}
 
-              {activeTab === 'admin-collections' && (
-                <AdminCollectionsReport onRefreshGlobal={fetchData} />
-              )}
+                {activeTab === 'admin-collections' && (
+                  <AdminCollectionsReport onRefreshGlobal={fetchData} />
+                )}
 
-              {activeTab === 'admin-products' && (
-                <AdminProductsManager
-                  products={products}
-                  categories={categories}
-                  onRefreshData={fetchData}
-                />
-              )}
+                {activeTab === 'admin-products' && (
+                  <AdminProductsManager
+                    products={products}
+                    categories={categories}
+                    onRefreshData={fetchData}
+                  />
+                )}
 
-              {activeTab === 'admin-low-stock' && (
-                <AdminLowStock
-                  products={products}
-                  settings={settings}
-                  onRefreshData={fetchData}
-                  onNavigateToSettings={() => setActiveTab('admin-settings')}
-                />
-              )}
+                {activeTab === 'admin-low-stock' && (
+                  <AdminLowStock
+                    products={products}
+                    settings={settings}
+                    onRefreshData={fetchData}
+                    onNavigateToSettings={() => setActiveTab('admin-settings')}
+                  />
+                )}
 
-              {activeTab === 'admin-deals' && (
-                <AdminDealsManager
-                  products={products}
-                  onRefreshData={fetchData}
-                  onRefreshProducts={fetchData}
-                />
-              )}
+                {activeTab === 'admin-deals' && (
+                  <AdminDealsManager
+                    products={products}
+                    onRefreshData={fetchData}
+                    onRefreshProducts={fetchData}
+                  />
+                )}
 
-              {activeTab === 'admin-information' && (
-                <AdminInformationManager
-                  products={products}
-                  onRefreshGlobal={fetchData}
-                />
-              )}
+                {activeTab === 'admin-information' && (
+                  <AdminInformationManager
+                    products={products}
+                    onRefreshData={fetchData}
+                  />
+                )}
 
-              {activeTab === 'admin-settings' && (
-                <AdminSettings settings={settings} onSaveSettings={handleSaveSettings} />
-              )}
+                {activeTab === 'admin-settings' && (
+                  <AdminSettings settings={settings} onSaveSettings={handleSaveSettings} />
+                )}
+              </ErrorBoundary>
             </main>
           </div>
         </div>
@@ -772,149 +802,165 @@ export default function App() {
         <div className="flex flex-col justify-between min-h-screen">
           <div>
             {/* Header */}
-            <Header
-              user={user}
-              settings={settings}
-              activeTab={activeTab}
-              setActiveTab={setActiveTab}
-              cartCount={cart.length}
-              unpaidDebt={customerUnpaidDebt}
-              unreadInfoCount={unreadInfoCount}
-              onOpenCart={() => setIsCartOpen(true)}
-              onOpenLogin={() => setIsLoginOpen(true)}
-              onOpenInformation={() => setIsCustomerInfoOpen(true)}
-              onLogout={handleLogout}
-            />
+            <ErrorBoundary sectionName="رأس الصفحة">
+              <Header
+                user={user}
+                settings={settings}
+                activeTab={activeTab}
+                setActiveTab={setActiveTab}
+                cartCount={cart.length}
+                unpaidDebt={customerUnpaidDebt}
+                unreadInfoCount={unreadInfoCount}
+                onOpenCart={() => setIsCartOpen(true)}
+                onOpenLogin={() => setIsLoginOpen(true)}
+                onOpenInformation={() => setIsCustomerInfoOpen(true)}
+                onLogout={handleLogout}
+              />
+            </ErrorBoundary>
 
             {/* Main Content Area */}
             <main className="max-w-2xl mx-auto px-3 sm:px-4 py-3">
               {/* Tab 1: Catalog / Home */}
               {activeTab === 'catalog' && (
-                <NotebookCatalog
-                  products={products}
-                  categories={categories}
-                  settings={settings}
-                  user={user}
-                  orders={orders}
-                  deals={deals}
-                  isStoreOpen={isStoreOpen}
-                  cart={cart}
-                  favorites={favorites}
-                  selectedCategory={selectedCategory}
-                  onSelectCategory={setSelectedCategory}
-                  onToggleFavorite={handleToggleFavorite}
-                  onUpdateCartItem={handleUpdateCartItem}
-                  onSetCartItemQty={handleSetCartItemQty}
-                  onOpenCart={() => setIsCartOpen(true)}
-                  onNavigateToTab={(tab) => setActiveTab(tab)}
-                  onReorder={handleReorder}
-                />
+                <ErrorBoundary sectionName="كتالوج المنتجات" onReset={fetchData}>
+                  <NotebookCatalog
+                    products={products}
+                    categories={categories}
+                    settings={settings}
+                    user={user}
+                    orders={orders}
+                    deals={deals}
+                    isStoreOpen={isStoreOpen}
+                    cart={cart}
+                    favorites={favorites}
+                    selectedCategory={selectedCategory}
+                    onSelectCategory={setSelectedCategory}
+                    onToggleFavorite={handleToggleFavorite}
+                    onUpdateCartItem={handleUpdateCartItem}
+                    onSetCartItemQty={handleSetCartItemQty}
+                    onOpenCart={() => setIsCartOpen(true)}
+                    onNavigateToTab={(tab) => setActiveTab(tab)}
+                    onReorder={handleReorder}
+                  />
+                </ErrorBoundary>
               )}
 
               {/* Tab 2: Categories Explorer */}
               {activeTab === 'categories' && (
-                <CategoriesExploreView
-                  categories={categories}
-                  products={products}
-                  onSelectCategory={(catName) => {
-                    setSelectedCategory(catName);
-                    setActiveTab('catalog');
-                  }}
-                />
+                <ErrorBoundary sectionName="تصفح الأقسام" onReset={fetchData}>
+                  <CategoriesExploreView
+                    categories={categories}
+                    products={products}
+                    onSelectCategory={(catName) => {
+                      setSelectedCategory(catName);
+                      setActiveTab('catalog');
+                    }}
+                  />
+                </ErrorBoundary>
               )}
 
               {/* Tab 3: Cart (Direct Tab trigger opens bottom sheet or catalog) */}
               {activeTab === 'cart' && (
-                <div className="py-8 text-center space-y-4">
-                  <div className="w-16 h-16 bg-emerald-100 text-emerald-800 rounded-3xl flex items-center justify-center mx-auto">
-                    <ShoppingCart className="w-8 h-8" />
+                <ErrorBoundary sectionName="سلة طلبات الجملة" onReset={() => setIsCartOpen(true)}>
+                  <div className="py-8 text-center space-y-4">
+                    <div className="w-16 h-16 bg-emerald-100 text-emerald-800 rounded-3xl flex items-center justify-center mx-auto">
+                      <ShoppingCart className="w-8 h-8" />
+                    </div>
+                    <h3 className="text-base font-black text-slate-900">سلة طلبات الجملة</h3>
+                    <p className="text-xs text-slate-500">
+                      لديك {cart.length} أصناف في السلة بإجمالي {cart.reduce((s, i) => s + i.product.price * i.quantity, 0).toLocaleString('ar-EG')} ج.م
+                    </p>
+                    <button
+                      onClick={() => setIsCartOpen(true)}
+                      className="px-6 py-3 bg-emerald-800 hover:bg-emerald-900 text-white font-black text-xs rounded-2xl shadow-md"
+                    >
+                      فتح السلة ومتابعة الطلب
+                    </button>
                   </div>
-                  <h3 className="text-base font-black text-slate-900">سلة طلبات الجملة</h3>
-                  <p className="text-xs text-slate-500">
-                    لديك {cart.length} أصناف في السلة بإجمالي {cart.reduce((s, i) => s + i.product.price * i.quantity, 0).toLocaleString('ar-EG')} ج.م
-                  </p>
-                  <button
-                    onClick={() => setIsCartOpen(true)}
-                    className="px-6 py-3 bg-emerald-800 hover:bg-emerald-900 text-white font-black text-xs rounded-2xl shadow-md"
-                  >
-                    فتح السلة ومتابعة الطلب
-                  </button>
-                </div>
+                </ErrorBoundary>
               )}
 
               {/* Tab 4: Orders & Account (Full Financial Ledger, Orders, Tracking, Statement) */}
               {(activeTab === 'orders' || activeTab === 'account') && (
-                <CustomerAccount
-                  user={user}
-                  settings={settings}
-                  orders={orders}
-                  onOpenLogin={() => setIsLoginOpen(true)}
-                  onLogout={handleLogout}
-                  onNavigateToTab={(tab) => setActiveTab(tab)}
-                  onReorder={handleReorder}
-                  onPrintReceipt={(ord) => setPrintingOrder(ord)}
-                />
+                <ErrorBoundary sectionName="كشف الحساب والطلبات" onReset={fetchData}>
+                  <CustomerAccount
+                    user={user}
+                    settings={settings}
+                    orders={orders}
+                    onOpenLogin={() => setIsLoginOpen(true)}
+                    onLogout={handleLogout}
+                    onNavigateToTab={(tab) => setActiveTab(tab)}
+                    onReorder={handleReorder}
+                    onPrintReceipt={(ord) => setPrintingOrder(ord)}
+                  />
+                </ErrorBoundary>
               )}
             </main>
           </div>
 
           {/* 5-Tab Mobile Bottom Navigation */}
-          <BottomNavigation
-            activeTab={activeTab === 'orders' ? 'orders' : activeTab === 'account' ? 'account' : activeTab}
-            onSelectTab={(tab) => {
+          <ErrorBoundary sectionName="شريط التنقل السفلي">
+            <BottomNavigation
+              activeTab={activeTab === 'orders' ? 'orders' : activeTab === 'account' ? 'account' : activeTab}
+              onSelectTab={(tab) => {
+                if (tab === 'cart') {
+                  setIsCartOpen(true);
+                } else {
+                  setActiveTab(tab);
+                }
+              }}
+              cartCount={cart.length}
+              unpaidDebt={customerUnpaidDebt}
+            />
+          </ErrorBoundary>
+        </div>
+      )}
+
+      {/* Halim AI Customer Assistant (مساعد الحليم الذكي) */}
+      {!isAdminView && (
+        <ErrorBoundary sectionName="المساعد الذكي">
+          <AIAssistant
+            user={user}
+            settings={settings}
+            orders={orders}
+            onNavigateToTab={(tab) => {
               if (tab === 'cart') {
                 setIsCartOpen(true);
               } else {
                 setActiveTab(tab);
               }
             }}
-            cartCount={cart.length}
-            unpaidDebt={customerUnpaidDebt}
+            onOpenCart={() => setIsCartOpen(true)}
+            onOpenLogin={() => setIsLoginOpen(true)}
           />
-        </div>
-      )}
-
-      {/* Halim AI Customer Assistant (مساعد الحليم الذكي) */}
-      {!isAdminView && (
-        <AIAssistant
-          user={user}
-          settings={settings}
-          orders={orders}
-          onNavigateToTab={(tab) => {
-            if (tab === 'cart') {
-              setIsCartOpen(true);
-            } else {
-              setActiveTab(tab);
-            }
-          }}
-          onOpenCart={() => setIsCartOpen(true)}
-          onOpenLogin={() => setIsLoginOpen(true)}
-        />
+        </ErrorBoundary>
       )}
 
       {/* Unified Bottom Sheet Cart */}
-      <BottomSheetCart
-        isOpen={isCartOpen}
-        onClose={() => setIsCartOpen(false)}
-        cart={cart}
-        allProducts={products}
-        user={user}
-        settings={settings}
-        onUpdateQty={handleUpdateCartItem}
-        onSetQty={handleSetCartItemQty}
-        onRemoveItem={handleRemoveCartItem}
-        onClearCart={handleClearCart}
-        onSaveCart={(newCart) => setCart(newCart)}
-        onBrowseCatalog={() => {
-          setIsCartOpen(false);
-          setActiveTab('catalog');
-        }}
-        onOpenLogin={() => setIsLoginOpen(true)}
-        onSubmitSuccess={(orderData) => {
-          setSubmittedOrder(orderData);
-          fetchData();
-        }}
-      />
+      <ErrorBoundary sectionName="سلة المشتريات" onReset={() => setIsCartOpen(false)}>
+        <BottomSheetCart
+          isOpen={isCartOpen}
+          onClose={() => setIsCartOpen(false)}
+          cart={cart}
+          allProducts={products}
+          user={user}
+          settings={settings}
+          onUpdateQty={handleUpdateCartItem}
+          onSetQty={handleSetCartItemQty}
+          onRemoveItem={handleRemoveCartItem}
+          onClearCart={handleClearCart}
+          onSaveCart={(newCart) => setCart(newCart)}
+          onBrowseCatalog={() => {
+            setIsCartOpen(false);
+            setActiveTab('catalog');
+          }}
+          onOpenLogin={() => setIsLoginOpen(true)}
+          onSubmitSuccess={(orderData) => {
+            setSubmittedOrder(orderData);
+            fetchData();
+          }}
+        />
+      </ErrorBoundary>
 
       {/* Order Success & 7-Stage Tracker Modal */}
       {submittedOrder && (

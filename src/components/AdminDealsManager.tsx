@@ -130,7 +130,7 @@ export const AdminDealsManager: React.FC<AdminDealsManagerProps> = ({
     if (prod) {
       setOriginalPrice(prod.price || 0);
       // Default to 10% discount if not already set
-      if (!offerPrice || offerPrice === '') {
+      if (!offerPrice) {
         const discounted = Math.max(1, Math.round((prod.price || 100) * 0.9));
         setOfferPrice(discounted);
       }
