@@ -20,6 +20,7 @@ import {
   UserCheck,
 } from 'lucide-react';
 import { apiFetch } from '../utils/api';
+import { AdminOrdersSalesChart } from './AdminOrdersSalesChart';
 
 interface AdminFastOrdersProps {
   orders: Order[];
@@ -219,6 +220,9 @@ export const AdminFastOrders: React.FC<AdminFastOrdersProps> = ({
           <span>{isOrdersOpen ? 'استقبال الطلبات: مفتوح 🟢' : 'استقبال الطلبات: مغلق 🔴'}</span>
         </button>
       </div>
+
+      {/* 7-Day Orders & Sales Analytics Chart */}
+      <AdminOrdersSalesChart orders={safeOrders} />
 
       {/* Filter Tabs */}
       <div className="flex items-center gap-1.5 overflow-x-auto pb-1 scrollbar-none text-xs">
@@ -686,4 +690,6 @@ export const AdminFastOrders: React.FC<AdminFastOrdersProps> = ({
     </div>
   );
 };
+
+export { AdminFastOrders as AdminOrders };
 

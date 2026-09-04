@@ -49,11 +49,10 @@ import {
   InformationStatus,
 } from './src/types.js';
 
-async function startServer() {
-  const app = express();
-  const PORT = 3000;
+const app = express();
+const PORT = 3000;
 
-  // Request body size limits
+// Request body size limits
   app.use(express.json({ limit: '2mb' }));
 
   // Global CORS & Preflight Handling (Crucial for Production, WebView, and Cross-Origin clients)
@@ -1696,6 +1695,56 @@ async function startServer() {
       res.json({ success: true, message: 'تم إعادة تعيين وتحميل كتالوج أصناف شركة الحليم بنجاح' });
     } catch (err: any) {
       res.status(500).json({ error: 'تعذر إعادة تعيين الكتالوج' });
+    }
+  });
+
+  // =========================================================================
+  // 3.1 LOW STOCK / WAREHOUSE DEFICIENCIES ENDPOINT (نواقص المخزن)
+  // =========================================================================
+  app.get('/api/products/low-stock', requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const db = await getDb();
+      const sysSettings = await getSystemConfig(db);
+      const thresholdQuery = req.query.threshold ? parseInt(req.query.threshold as string, 10) : undefined;
+      const threshold = (thresholdQuery !== undefined && !isNaN(thresholdQuery) && thresholdQuery > 0)
+        ? thresholdQuery
+        : (sysSettings?.lowStockThreshold ?? 30);
+
+      const stmt = db.prepare(`
+        SELECT id, name, category, price, unit, image, status, minQty, maxQty, stock, description
+        FROM products
+        WHERE stock < ?
+        ORDER BY stock ASC, name ASC
+      `);
+      stmt.bind([threshold]);
+      const items: Product[] = [];
+      while (stmt.step()) {
+        const row = stmt.getAsObject();
+        items.push({
+          id: String(row.id),
+          name: String(row.name),
+          category: String(row.category || 'عام'),
+          price: Number(row.price || 0),
+          unit: String(row.unit || 'كرتونة'),
+          image: String(row.image || ''),
+          status: (row.status as any) || 'open',
+          minQty: Number(row.minQty ?? 1),
+          maxQty: row.maxQty !== null && row.maxQty !== undefined ? Number(row.maxQty) : null,
+          stock: Number(row.stock ?? 0),
+          description: row.description ? String(row.description) : undefined,
+        });
+      }
+      stmt.free();
+
+      res.json({
+        success: true,
+        threshold,
+        count: items.length,
+        products: items,
+      });
+    } catch (err: any) {
+      console.error('Error fetching low stock products:', err);
+      res.status(500).json({ error: 'تعذر جلب نواقص المخزن من قاعدة البيانات' });
     }
   });
 
@@ -5365,43 +5414,52 @@ ${customerContext}
   });
 
   // ==========================================
+  // EXPORT APP FOR VERCEL SERVERLESS & MODULES
+  // ==========================================
+  export { app };
+  export default app;
+
+  // ==========================================
   // VITE & STATIC PRODUCTION SETUP
   // ==========================================
 
-  if (process.env.NODE_ENV !== 'production') {
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: 'spa',
-    });
-    app.use(vite.middlewares);
-  } else {
-    const cwdDist = path.join(process.cwd(), 'dist');
-    const localDist = path.resolve(__dirname);
-    const parentDist = path.resolve(__dirname, '..', 'dist');
-
-    let distPath = cwdDist;
-    if (fs.existsSync(path.join(cwdDist, 'index.html'))) {
-      distPath = cwdDist;
-    } else if (fs.existsSync(path.join(localDist, 'index.html'))) {
-      distPath = localDist;
-    } else if (fs.existsSync(path.join(parentDist, 'index.html'))) {
-      distPath = parentDist;
-    }
-
-    app.use(express.static(distPath, { index: false }));
-    app.get('*', (req: Request, res: Response) => {
-      const indexPath = path.join(distPath, 'index.html');
-      if (fs.existsSync(indexPath)) {
-        res.sendFile(indexPath);
+  async function startServer() {
+    if (!process.env.VERCEL) {
+      if (process.env.NODE_ENV !== 'production') {
+        const vite = await createViteServer({
+          server: { middlewareMode: true },
+          appType: 'spa',
+        });
+        app.use(vite.middlewares);
       } else {
-        res.status(404).send('Production build not found. Please run npm run build.');
+        const cwdDist = path.join(process.cwd(), 'dist');
+        const localDist = path.resolve(__dirname);
+        const parentDist = path.resolve(__dirname, '..', 'dist');
+
+        let distPath = cwdDist;
+        if (fs.existsSync(path.join(cwdDist, 'index.html'))) {
+          distPath = cwdDist;
+        } else if (fs.existsSync(path.join(localDist, 'index.html'))) {
+          distPath = localDist;
+        } else if (fs.existsSync(path.join(parentDist, 'index.html'))) {
+          distPath = parentDist;
+        }
+
+        app.use(express.static(distPath, { index: false }));
+        app.get('*', (req: Request, res: Response) => {
+          const indexPath = path.join(distPath, 'index.html');
+          if (fs.existsSync(indexPath)) {
+            res.sendFile(indexPath);
+          } else {
+            res.status(404).send('Production build not found. Please run npm run build.');
+          }
+        });
       }
-    });
+
+      app.listen(PORT, '0.0.0.0', () => {
+        console.log(`Server running on http://0.0.0.0:${PORT}`);
+      });
+    }
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Server running on http://0.0.0.0:${PORT}`);
-  });
-}
-
-startServer();
+  startServer();

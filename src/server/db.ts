@@ -6,7 +6,23 @@ import * as argon2 from 'argon2';
 import { Product, Category, Order, OrderItem, SystemSettings, User, OrderLog, SystemNotification } from '../types.js';
 import { INITIAL_CATEGORIES, INITIAL_PRODUCTS } from './catalogData.js';
 
-const DB_DIR = path.resolve(process.cwd(), 'data');
+function getResolvedDbDir(): string {
+  if (process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME) {
+    return path.resolve('/tmp', 'data');
+  }
+  const defaultDir = path.resolve(process.cwd(), 'data');
+  try {
+    if (!fs.existsSync(defaultDir)) {
+      fs.mkdirSync(defaultDir, { recursive: true });
+    }
+    return defaultDir;
+  } catch (err) {
+    // If process.cwd() is read-only (e.g. serverless or container sandbox), fallback to /tmp
+    return path.resolve('/tmp', 'data');
+  }
+}
+
+const DB_DIR = getResolvedDbDir();
 const BACKUP_DIR = path.resolve(DB_DIR, 'backups');
 const DB_FILE = path.resolve(DB_DIR, 'halim.sqlite');
 

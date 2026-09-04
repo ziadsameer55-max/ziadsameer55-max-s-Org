@@ -5,6 +5,7 @@ import {
   ClipboardList,
   Wallet,
   Package,
+  PackageX,
   Settings,
   Store,
   Power,
@@ -48,6 +49,8 @@ export const AdminSidebar: React.FC<AdminSidebarProps> = ({
   const safeProducts = Array.isArray(products) ? products : [];
   const pendingOrdersCount = safeOrders.filter((o) => o.status === 'Pending').length;
   const isOrdersOpen = settings?.manualOrdersOpen ?? true;
+  const lowStockThreshold = settings?.lowStockThreshold ?? 30;
+  const lowStockCount = safeProducts.filter((p) => (p.stock ?? 0) < lowStockThreshold).length;
 
   const navItems = [
     {
@@ -84,6 +87,13 @@ export const AdminSidebar: React.FC<AdminSidebarProps> = ({
       icon: Package,
       badge: `${products.length} صنف`,
       badgeColor: 'bg-slate-700 text-slate-300',
+    },
+    {
+      id: 'admin-low-stock',
+      label: 'نواقص المخزن',
+      icon: PackageX,
+      badge: lowStockCount > 0 ? `${lowStockCount} ناقص` : '0',
+      badgeColor: lowStockCount > 0 ? 'bg-red-600 text-white font-black animate-pulse' : 'bg-slate-700 text-slate-300',
     },
     {
       id: 'admin-deals',

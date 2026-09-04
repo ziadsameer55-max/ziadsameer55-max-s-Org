@@ -3,6 +3,8 @@ import { SystemSettings, PaperSize, DaySchedule, PrintFontSizes } from '../types
 import { BrandLogo } from './BrandLogo';
 import {
   Settings,
+  PackageX,
+  Boxes,
   Printer,
   Clock,
   Save,
@@ -71,6 +73,7 @@ export const AdminSettings: React.FC<AdminSettingsProps> = ({
       hidePrices: false,
       scheduleEnabled: true,
       preventOutOfStockSale: false,
+      lowStockThreshold: 30,
       showPreviousDebtOnReceipt: true,
       showHeaderLogo: true,
       showItemsBorder: true,
@@ -428,6 +431,72 @@ export const AdminSettings: React.FC<AdminSettingsProps> = ({
                 <span className="text-[10px] text-slate-500 font-bold">
                   {settings.hidePrices ? 'مفعل' : 'معطل'}
                 </span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* 📦 إعدادات المخزون وحد تنبيه النواقص (Low Stock Alert Threshold) */}
+        <div className="bg-white border-2 border-amber-200/90 rounded-2xl p-4 sm:p-5 space-y-4 shadow-xs">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-3 border-b border-amber-100">
+            <div className="flex items-center gap-2.5 text-amber-900 font-black text-sm sm:text-base">
+              <div className="w-9 h-9 rounded-xl bg-amber-100 text-amber-800 flex items-center justify-center shrink-0">
+                <PackageX className="w-5 h-5" />
+              </div>
+              <div>
+                <span>حد تنبيه نواقص المخزن (Low Stock Threshold)</span>
+                <span className="block text-[11px] text-slate-500 font-normal">
+                  تحديد الحد الأدنى لكمية المخزون الذي تظهر الأصناف دونه في قسم "📦 نواقص المخزن" تلقائيًا (الافتراضي: 30)
+                </span>
+              </div>
+            </div>
+            <span className="text-xs px-3 py-1 rounded-full bg-amber-500 text-slate-950 font-black font-mono self-start sm:self-auto">
+              الحد المعتمد: {settings.lowStockThreshold ?? 30} كرتونة
+            </span>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-center">
+            <div className="space-y-2">
+              <label className="block text-xs font-bold text-slate-700">
+                حد النقص لجميع أصناف المخزن (بالكرتونة / الصندوق):
+              </label>
+              <div className="flex items-center gap-2">
+                <input
+                  type="number"
+                  min="1"
+                  max="1000"
+                  value={settings.lowStockThreshold ?? 30}
+                  onChange={(e) => {
+                    const val = Math.max(1, parseInt(e.target.value, 10) || 1);
+                    setSettings({ ...settings, lowStockThreshold: val });
+                  }}
+                  className="w-36 px-4 py-2.5 border-2 border-amber-300 rounded-xl font-mono text-base font-black text-slate-900 focus:outline-none focus:border-amber-500 text-center"
+                />
+                <span className="text-xs font-bold text-slate-600">كرتونة / عبوة</span>
+              </div>
+              <p className="text-[11px] text-slate-500">
+                أي منتج يقل رصيد مخزونه الفعلي عن هذا الرقم سيندرج فورًا في قسم نواقص المخزن مع احتساب حالته (نفد، حرج، قليل، منخفض).
+              </p>
+            </div>
+
+            {/* Quick Presets */}
+            <div className="space-y-2 bg-slate-50 p-3.5 rounded-xl border border-slate-200">
+              <span className="block text-xs font-bold text-slate-700">خيارات سريعة مقترحة للحد:</span>
+              <div className="flex flex-wrap gap-2">
+                {[10, 20, 30, 40, 50, 60].map((num) => (
+                  <button
+                    key={num}
+                    type="button"
+                    onClick={() => setSettings({ ...settings, lowStockThreshold: num })}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-mono font-bold transition-colors ${
+                      (settings.lowStockThreshold ?? 30) === num
+                        ? 'bg-amber-500 text-slate-950 font-black shadow-xs ring-2 ring-amber-400/40'
+                        : 'bg-white text-slate-700 hover:bg-slate-100 border border-slate-200'
+                    }`}
+                  >
+                    {num} {num === 30 ? '⭐ الافتراضي' : ''}
+                  </button>
+                ))}
               </div>
             </div>
           </div>

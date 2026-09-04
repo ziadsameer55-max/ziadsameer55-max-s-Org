@@ -22,6 +22,7 @@ import { AdminCustomersManager } from './components/AdminCustomersManager';
 import { AdminDebtsManager } from './components/AdminDebtsManager';
 import { AdminCollectionsReport } from './components/AdminCollectionsReport';
 import { AdminProductsManager } from './components/AdminProductsManager';
+import { AdminLowStock } from './components/AdminLowStock';
 import { AdminDealsManager } from './components/AdminDealsManager';
 import { AdminInformationManager } from './components/AdminInformationManager';
 import { CustomerInformationModal } from './components/CustomerInformationModal';
@@ -173,6 +174,12 @@ export default function App() {
       try {
         const saved = localStorage.getItem('halim_user');
         if (saved) {
+          const parsedSaved = JSON.parse(saved);
+          // Pre-populate user state immediately so UI is responsive
+          if (parsedSaved && parsedSaved.id) {
+            setUser(parsedSaved);
+          }
+
           const res = await apiFetch('/api/auth/me');
           if (res.ok) {
             const data = await res.json();
@@ -184,7 +191,8 @@ export default function App() {
               localStorage.removeItem('halim_user');
               setUser(null);
             }
-          } else {
+          } else if (res.status === 401 || res.status === 403) {
+            // Explicitly unauthorized or expired
             localStorage.removeItem('halim_user');
             setUser(null);
           }
@@ -198,6 +206,29 @@ export default function App() {
       }
     }
     verifySession();
+
+    // Listen to global 401 Session Expired events from apiClient / apiFetch
+    const handleAuthExpiredEvent = (e: any) => {
+      const msg = e.detail?.message || 'انتهت صلاحية الجلسة، يرجى تسجيل الدخول مجدداً';
+      localStorage.removeItem('halim_user');
+      setUser(null);
+      showToast(msg, 'error');
+      setIsLoginOpen(true);
+    };
+
+    // Network connection status listeners
+    const handleOnline = () => showToast('تم استعادة الاتصال بالإنترنت 🟢', 'success');
+    const handleOffline = () => showToast('انقطع الاتصال بالإنترنت ⚠️ يرجى التحقق من الشبكة', 'error');
+
+    window.addEventListener('halim:session-expired', handleAuthExpiredEvent);
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+
+    return () => {
+      window.removeEventListener('halim:session-expired', handleAuthExpiredEvent);
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
   }, []);
 
   // Strict Admin Route Guard for Non-Admin / Customer Accounts
@@ -625,6 +656,7 @@ export default function App() {
                       {activeTab === 'admin-debts' && '💰 إدارة التحصيل والمديونيات'}
                       {activeTab === 'admin-collections' && '💰 التحصيل والمقبوضات'}
                       {activeTab === 'admin-products' && '📦 إدارة المنتجات والتسعير'}
+                      {activeTab === 'admin-low-stock' && '📦 نواقص المخزن وتنبيهات العجز'}
                       {activeTab === 'admin-deals' && '🔥 إدارة العروض والخصومات'}
                       {activeTab === 'admin-information' && '🔔 إدارة المعلومات والتنبيهات'}
                       {activeTab === 'admin-settings' && '⚙️ إعدادات النظام والمتجر'}
@@ -700,6 +732,15 @@ export default function App() {
                   products={products}
                   categories={categories}
                   onRefreshData={fetchData}
+                />
+              )}
+
+              {activeTab === 'admin-low-stock' && (
+                <AdminLowStock
+                  products={products}
+                  settings={settings}
+                  onRefreshData={fetchData}
+                  onNavigateToSettings={() => setActiveTab('admin-settings')}
                 />
               )}
 
